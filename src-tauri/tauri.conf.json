@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/crates/tauri-cli/schema.json",
+  "productName": "DocTransform",
+  "version": "0.1.0",
+  "identifier": "com.doctransform.app",
+  "build": {
+    "beforeDevCommand": "cd app && npm run dev",
+    "devUrl": "http://localhost:3000",
+    "beforeBuildCommand": "cd app && npm run build",
+    "frontendDist": "../app/.next/standalone"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DocTransform",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/256x256.png",
+      "icons/icon.icns",
+      "icons/icon.png"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "open": true
+    }
+  }
+}
