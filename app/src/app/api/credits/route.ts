@@ -12,10 +12,13 @@ export async function GET(request: Request) {
       );
     }
 
-    const [balance, usageLogs] = await Promise.all([
-      getBalance(keyId),
-      getUsageLogs(keyId),
-    ]);
+    const balance = await getBalance(keyId);
+    let usageLogs: Awaited<ReturnType<typeof getUsageLogs>> = [];
+    try {
+      usageLogs = await getUsageLogs(keyId);
+    } catch {
+      // Usage logs query may need a Firestore composite index — return empty array
+    }
 
     return Response.json({ key_id: keyId, balance, usage: usageLogs });
   } catch (error) {

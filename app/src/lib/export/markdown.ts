@@ -17,12 +17,11 @@ function getTurndown(): TurndownService {
     strongDelimiter: '**',
   });
 
-  // GFM tables support
+  // GFM tables support — parse from innerHTML since Node.js DOM is limited
   turndown.addRule('table', {
     filter: ['table'],
-    replacement: function (content, node) {
-      const table = node as HTMLTableElement;
-      return convertTableToGfm(table);
+    replacement: function (_content, node) {
+      return convertTableToGfm(node);
     },
   });
 
@@ -30,7 +29,6 @@ function getTurndown(): TurndownService {
   turndown.addRule('underline', {
     filter: ['u'],
     replacement: function (content) {
-      // Underline has no MD equivalent — preserve content, drop formatting
       return content;
     },
   });
@@ -62,27 +60,37 @@ function getTurndown(): TurndownService {
   return turndown;
 }
 
-function convertTableToGfm(table: HTMLTableElement): string {
+function convertTableToGfm(node: TurndownService.Node): string {
+  // Use innerHTML/outerHTML to extract table structure
+  const html = (node as unknown as Element).outerHTML || (node as unknown as Element).innerHTML || '';
+  if (!html) return '';
+
   const rows: string[][] = [];
   let hasHeader = false;
 
-  // Extract rows
-  const tableRows = table.querySelectorAll('tr');
-  tableRows.forEach((tr, rowIdx) => {
+  // Parse rows with regex since we don't have full DOM in Node.js
+  const trMatches = html.match(/<tr[^>]*>([\s\S]*?)<\/tr>/gi) || [];
+
+  for (const trHtml of trMatches) {
     const cells: string[] = [];
-    const tds = tr.querySelectorAll('td, th');
-    tds.forEach(td => {
-      // For merged cells, GFM can't represent colspan/rowspan
-      // Just include the content
-      cells.push((td.textContent || '').trim().replace(/\|/g, '\\|').replace(/\n/g, ' '));
-    });
+    const cellMatches = trHtml.match(/<(td|th)[^>]*>([\s\S]*?)<\/\1>/gi) || [];
+
+    for (const cellHtml of cellMatches) {
+      const isHeader = cellHtml.startsWith('<th');
+      if (isHeader) hasHeader = true;
+      // Strip HTML tags to get text content
+      const text = cellHtml
+        .replace(/<[^>]*>/g, '')
+        .trim()
+        .replace(/\|/g, '\\|')
+        .replace(/\n/g, ' ');
+      cells.push(text);
+    }
+
     if (cells.length > 0) {
       rows.push(cells);
     }
-    if (tr.querySelector('th')) {
-      hasHeader = true;
-    }
-  });
+  }
 
   if (rows.length === 0) return '';
 
@@ -103,7 +111,6 @@ function convertTableToGfm(table: HTMLTableElement): string {
       lines.push('| ' + normalized[i].join(' | ') + ' |');
     }
   } else {
-    // No header row — add empty header
     lines.push('| ' + normalized[0].map(() => ' ').join(' | ') + ' |');
     lines.push('| ' + normalized[0].map(() => '---').join(' | ') + ' |');
     for (const row of normalized) {
