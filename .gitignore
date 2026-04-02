@@ -6,6 +6,8 @@ target/
 __pycache__/
 .env
 .env.local
+.firebase-service-account.json
+firebase-service-account.json
 *.db
 *.sqlite
 .DS_Store
