@@ -189,20 +189,6 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
     return text, table_html, img_path, latex
 
 
-def _join_visual_lines(text: str) -> str:
-    """Replace single \\n with space, preserve \\n\\n (paragraph breaks)."""
-    import re
-    # Protect double newlines
-    text = text.replace('\r\n', '\n')
-    text = re.sub(r'\n{2,}', '\x00', text)
-    # Single newlines → space
-    text = text.replace('\n', ' ')
-    # Restore paragraph breaks
-    text = text.replace('\x00', '\n\n')
-    # Collapse multiple spaces
-    text = re.sub(r'  +', ' ', text)
-    return text.strip()
-
 
 def _is_poor_table_html(html: str) -> bool:
     """Check if RapidTable HTML is low quality (mostly empty cells or all data in one cell)."""
@@ -224,52 +210,6 @@ def _is_poor_table_html(html: str) -> bool:
             return True
     return False
 
-
-def _vision_llm_table(img_path: str) -> str:
-    """Use vision LLM to extract a proper HTML table from a table image."""
-    import base64
-    import cv2
-    from magic_pdf.model.sub_modules.ocr.paddleocr2pytorch.vision_llm_ocr import (
-        _call_openrouter,
-    )
-
-    prompt = """\
-Extract the table from this image and return it as a clean HTML table.
-
-Rules:
-- Return ONLY an HTML <table> element, nothing else.
-- Each row becomes a <tr>, each cell a <td> (use <th> for header cells).
-- Preserve all text exactly as it appears.
-- If a cell spans multiple columns or rows, use colspan/rowspan attributes.
-- Do NOT wrap in <html> or <body> tags.
-"""
-
-    try:
-        img = cv2.imread(img_path)
-        if img is None:
-            return ''
-        success, buf = cv2.imencode('.jpg', img, [cv2.IMWRITE_JPEG_QUALITY, 90])
-        if not success:
-            return ''
-        image_b64 = base64.b64encode(buf).decode('ascii')
-        raw = _call_openrouter(image_b64, prompt)
-        raw = raw.strip()
-        # Strip markdown fences
-        if raw.startswith('```'):
-            raw = raw.split('\n', 1)[-1]
-            if raw.endswith('```'):
-                raw = raw[:-3]
-            raw = raw.strip()
-        # Remove <html><body> wrapper if model added it
-        raw = raw.replace('<html>', '').replace('</html>', '')
-        raw = raw.replace('<body>', '').replace('</body>', '')
-        raw = raw.strip()
-        if '<table' in raw.lower():
-            return raw
-        return ''
-    except Exception as e:
-        print(f'[MinerU Server] Vision LLM table extraction failed: {e}')
-        return ''
 
 
 def _attach_table_html(blocks: list, tbl_bbox: list, tbl_html: str):
