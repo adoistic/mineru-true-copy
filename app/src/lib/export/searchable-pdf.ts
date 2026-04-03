@@ -43,7 +43,7 @@ export async function createSearchablePdf(
       const regionHeight = (y2 - y1) * scaleY;
 
       // Calculate font size to fit text in the region
-      const text = region.content.replace(/\n/g, ' ').trim();
+      const text = region.content.replace(/<[^>]+>/g, '').replace(/\n/g, ' ').trim();
       if (!text) continue;
 
       // Estimate font size based on region height

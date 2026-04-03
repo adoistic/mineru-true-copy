@@ -106,18 +106,18 @@ function sortByReadingOrder(regions: MineruRegion[]): MineruRegion[] {
   });
 }
 
-function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): string {
+export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): string {
   switch (region.type) {
     case 'title': {
       const level = region.level && region.level >= 1 && region.level <= 6 ? region.level : 1;
-      return `<h${level}>${escapeHtml(region.content)}</h${level}>`;
+      return `<h${level}>${sanitizeFormattedText(region.content)}</h${level}>`;
     }
 
     case 'text':
       if (joinWithPrevious) {
-        return escapeHtml(region.content).replace(/\n/g, '<br>\n');
+        return sanitizeFormattedText(region.content).replace(/\n/g, '<br>\n');
       }
-      return `<p>${escapeHtml(region.content).replace(/\n/g, '<br>\n')}</p>`;
+      return `<p>${sanitizeFormattedText(region.content).replace(/\n/g, '<br>\n')}</p>`;
 
     case 'table': {
       let tableHtml = convertTable(region);
@@ -183,25 +183,82 @@ function convertTable(region: MineruRegion): string {
   return html;
 }
 
-function sanitizeTableHtml(html: string): string {
-  // Basic sanitization: allow only table-related tags and style attributes
-  // Strip any script tags or event handlers
+const ALLOWED_CSS_PROPERTIES = new Set([
+  'width', 'min-width', 'background-color', 'background',
+  'border', 'border-top', 'border-bottom', 'border-left', 'border-right',
+  'border-collapse', 'text-align', 'vertical-align', 'padding',
+]);
+
+const BLOCKED_CSS_PROPERTIES = new Set([
+  'border-image', 'font-family', 'font-size', 'color',
+  'position', 'float', 'display', 'margin',
+]);
+
+function sanitizeCssValue(value: string): boolean {
+  const lower = value.toLowerCase();
+  return !lower.includes('url(') && !lower.includes('expression(') && !lower.includes('!important');
+}
+
+function sanitizeStyleAttribute(style: string): string {
+  const declarations = style.split(';').map(d => d.trim()).filter(Boolean);
+  const allowed: string[] = [];
+
+  for (const decl of declarations) {
+    const colonIdx = decl.indexOf(':');
+    if (colonIdx === -1) continue;
+    const prop = decl.substring(0, colonIdx).trim().toLowerCase();
+    const value = decl.substring(colonIdx + 1).trim();
+
+    if (BLOCKED_CSS_PROPERTIES.has(prop)) continue;
+    if (!ALLOWED_CSS_PROPERTIES.has(prop)) continue;
+    if (!sanitizeCssValue(value)) continue;
+
+    // For width, only allow percentage values (convert px to %)
+    if (prop === 'width') {
+      const pxMatch = value.match(/^(\d+)\s*px$/i);
+      if (pxMatch) {
+        const pct = Math.round((parseInt(pxMatch[1]) / 612) * 100);
+        allowed.push(`width: ${pct}%`);
+        continue;
+      }
+    }
+
+    allowed.push(`${prop}: ${value}`);
+  }
+
+  return allowed.length > 0 ? ` style="${allowed.join('; ')}"` : '';
+}
+
+export function sanitizeTableHtml(html: string): string {
+  // Strip script tags and event handlers
   let sanitized = html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/on\w+="[^"]*"/gi, '')
     .replace(/on\w+='[^']*'/gi, '');
 
-  // Convert fixed widths to proportional where possible
-  sanitized = sanitized.replace(/width:\s*(\d+)px/gi, (match, px) => {
-    // Convert pixel widths to percentages based on typical page width
-    const pct = Math.round((parseInt(px) / 612) * 100);
-    return `width: ${pct}%`;
+  // Strip class and id attributes
+  sanitized = sanitized.replace(/\s+class="[^"]*"/gi, '');
+  sanitized = sanitized.replace(/\s+class='[^']*'/gi, '');
+  sanitized = sanitized.replace(/\s+id="[^"]*"/gi, '');
+  sanitized = sanitized.replace(/\s+id='[^']*'/gi, '');
+
+  // Process style attributes
+  sanitized = sanitized.replace(/\s+style="([^"]*)"/gi, (_match, styleContent) => {
+    return sanitizeStyleAttribute(styleContent);
+  });
+  sanitized = sanitized.replace(/\s+style='([^']*)'/gi, (_match, styleContent) => {
+    return sanitizeStyleAttribute(styleContent);
   });
 
   return sanitized;
 }
 
-function convertList(content: string): string {
+export function convertList(content: string): string {
+  // If content already contains HTML list tags, pass through sanitizer instead of re-parsing
+  if (/<ul[\s>]|<ol[\s>]|<li[\s>]/i.test(content)) {
+    return sanitizeFormattedText(content);
+  }
+
   const lines = content.split('\n').filter(l => l.trim());
   if (lines.length === 0) return '';
 
@@ -219,13 +276,36 @@ function convertList(content: string): string {
   return html;
 }
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
   return text
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+const ALLOWED_TAGS = ['strong', 'em', 'u', 'ul', 'ol', 'li', 'b', 'i'] as const;
+
+export function sanitizeFormattedText(text: string): string {
+  // Step 1: Escape ALL HTML
+  let result = escapeHtml(text);
+
+  // Step 2: Unescape ONLY the allowed tags (opening and closing, stripping any attributes)
+  for (const tag of ALLOWED_TAGS) {
+    // Opening tags with or without attributes: &lt;strong class=&quot;x&quot;&gt; → <strong>
+    result = result.replace(
+      new RegExp(`&lt;${tag}(\\s.*?)?&gt;`, 'gi'),
+      `<${tag}>`
+    );
+    // Closing tags: &lt;/strong&gt; → </strong>
+    result = result.replace(
+      new RegExp(`&lt;/${tag}&gt;`, 'gi'),
+      `</${tag}>`
+    );
+  }
+
+  return result;
 }
 
 function getDefaultStyles(): string {
