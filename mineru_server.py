@@ -6,6 +6,8 @@ Next.js OCR pipeline client.
 Usage:
     ./mineru-venv/bin/python mineru_server.py
 """
+import lib.patch_mineru  # noqa: F401
+
 import json
 import os
 import tempfile
