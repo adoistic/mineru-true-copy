@@ -101,10 +101,10 @@ export default function Home() {
 
     const fetchCredits = async () => {
       try {
-        const res = await fetch(`/api/keys?id=${keyId}`);
+        const res = await fetch(`/api/credits?key_id=${keyId}`);
         if (res.ok) {
           const data = await res.json();
-          setCreditBalance(data.credit_balance ?? 0);
+          setCreditBalance(data.balance?.balance ?? 0);
         }
       } catch {
         // Silently ignore
