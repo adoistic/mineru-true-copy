@@ -121,6 +121,50 @@ describe('sanitizeTableHtml', () => {
     expect(result).not.toContain('class=');
     expect(result).not.toContain('id=');
   });
+
+  it('20s. strips <script> tags', () => {
+    const result = sanitizeTableHtml('<table><tr><td><script>alert("xss")</script>safe</td></tr></table>');
+    expect(result).not.toContain('<script>');
+    expect(result).toContain('safe');
+  });
+
+  it('21s. strips onclick (quoted) from td', () => {
+    const result = sanitizeTableHtml('<td onclick="alert(1)">cell</td>');
+    expect(result).not.toContain('onclick');
+    expect(result).toContain('cell');
+  });
+
+  it('22s. strips onclick (unquoted) from td', () => {
+    const result = sanitizeTableHtml('<td onclick=alert(1)>cell</td>');
+    expect(result).not.toContain('onclick');
+    expect(result).toContain('cell');
+  });
+
+  it('23s. strips <iframe> but keeps text content', () => {
+    const result = sanitizeTableHtml('<table><tr><td><iframe src="evil.com"></iframe>content</td></tr></table>');
+    expect(result).not.toContain('<iframe');
+    expect(result).not.toContain('</iframe>');
+    expect(result).toContain('content');
+  });
+
+  it('24s. strips <form> and <input> tags', () => {
+    const result = sanitizeTableHtml('<table><tr><td><form><input></form>text</td></tr></table>');
+    expect(result).not.toContain('<form');
+    expect(result).not.toContain('<input');
+    expect(result).toContain('text');
+  });
+
+  it('25s. allows safe table HTML through unchanged', () => {
+    const input = '<table><tr><td>safe</td></tr></table>';
+    const result = sanitizeTableHtml(input);
+    expect(result).toBe(input);
+  });
+
+  it('26s. keeps <strong> inside <td>', () => {
+    const result = sanitizeTableHtml('<td><strong>bold</strong></td>');
+    expect(result).toContain('<strong>bold</strong>');
+    expect(result).toContain('<td>');
+  });
 });
 
 // --- convertList tests ---

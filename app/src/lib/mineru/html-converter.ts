@@ -213,14 +213,9 @@ function sanitizeStyleAttribute(style: string): string {
     if (!ALLOWED_CSS_PROPERTIES.has(prop)) continue;
     if (!sanitizeCssValue(value)) continue;
 
-    // For width, only allow percentage values (convert px to %)
+    // For width, strip px values (LLM prompt asks for percentages), keep % values
     if (prop === 'width') {
-      const pxMatch = value.match(/^(\d+)\s*px$/i);
-      if (pxMatch) {
-        const pct = Math.round((parseInt(pxMatch[1]) / 612) * 100);
-        allowed.push(`width: ${pct}%`);
-        continue;
-      }
+      if (/px/i.test(value)) continue;
     }
 
     allowed.push(`${prop}: ${value}`);
@@ -233,8 +228,7 @@ export function sanitizeTableHtml(html: string): string {
   // Strip script tags and event handlers
   let sanitized = html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/on\w+="[^"]*"/gi, '')
-    .replace(/on\w+='[^']*'/gi, '');
+    .replace(/\s*on\w+=(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '');
 
   // Strip class and id attributes
   sanitized = sanitized.replace(/\s+class="[^"]*"/gi, '');
@@ -248,6 +242,15 @@ export function sanitizeTableHtml(html: string): string {
   });
   sanitized = sanitized.replace(/\s+style='([^']*)'/gi, (_match, styleContent) => {
     return sanitizeStyleAttribute(styleContent);
+  });
+
+  // Strip disallowed tags (keep their text content)
+  const TABLE_ALLOWED_TAGS = new Set([
+    'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
+    'colgroup', 'col', 'strong', 'em', 'u', 'b', 'i',
+  ]);
+  sanitized = sanitized.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/gi, (match, tagName) => {
+    return TABLE_ALLOWED_TAGS.has(tagName.toLowerCase()) ? match : '';
   });
 
   return sanitized;
