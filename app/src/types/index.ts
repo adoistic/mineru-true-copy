@@ -69,6 +69,8 @@ export interface MineruRegion {
   html?: string;
   table_html?: string;
   latex?: string;
+  img_data?: string; // Base64-encoded image data
+  img_mime?: string; // MIME type (image/jpeg, image/png)
   level?: number; // Heading level 1-6 for title regions (set by heading correction)
   children?: MineruRegion[];
 }

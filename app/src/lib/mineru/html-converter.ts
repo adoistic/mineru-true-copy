@@ -115,12 +115,19 @@ function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): string {
 
     case 'text':
       if (joinWithPrevious) {
-        return escapeHtml(region.content);
+        return escapeHtml(region.content).replace(/\n/g, '<br>\n');
       }
-      return `<p>${escapeHtml(region.content)}</p>`;
+      return `<p>${escapeHtml(region.content).replace(/\n/g, '<br>\n')}</p>`;
 
-    case 'table':
-      return convertTable(region);
+    case 'table': {
+      let tableHtml = convertTable(region);
+      // If table block also has an embedded image, prepend it
+      if (region.img_data && region.img_mime) {
+        const imgTag = `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`;
+        tableHtml = imgTag + '\n' + tableHtml;
+      }
+      return tableHtml;
+    }
 
     case 'formula':
       if (region.latex) {
@@ -128,8 +135,13 @@ function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): string {
       }
       return `<p class="formula">${escapeHtml(region.content)}</p>`;
 
-    case 'figure':
-      return `<figure><figcaption>${escapeHtml(region.content)}</figcaption></figure>`;
+    case 'figure': {
+      const imgTag = region.img_data && region.img_mime
+        ? `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`
+        : '';
+      const caption = region.content ? `<figcaption>${escapeHtml(region.content)}</figcaption>` : '';
+      return `<figure>${imgTag}${caption}</figure>`;
+    }
 
     case 'list':
       return convertList(region.content);

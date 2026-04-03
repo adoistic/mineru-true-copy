@@ -209,6 +209,8 @@ function parseRegions(page: Record<string, unknown>): MineruOutput['pages'][0]['
       html: block.html as string | undefined,
       table_html: block.table_html as string | undefined,
       latex: block.latex as string | undefined,
+      img_data: block.img_data as string | undefined,
+      img_mime: block.img_mime as string | undefined,
     };
   });
 }
@@ -234,10 +236,13 @@ function extractContent(block: Record<string, unknown>): string {
   if (typeof block.text === 'string') return block.text;
   if (typeof block.content === 'string') return block.content;
 
-  // Handle nested spans/lines
+  // Handle nested spans/lines — join with space for text/title (visual line wraps),
+  // keep \n for tables/lists (semantic separators)
+  const blockType = block.type as string || 'text';
   const lines = (block.lines || []) as Record<string, unknown>[];
-  return lines.map(line => {
+  const lineTexts = lines.map(line => {
     const spans = (line.spans || []) as Record<string, unknown>[];
     return spans.map(span => span.text || span.content || '').join('');
-  }).join('\n');
+  });
+  return lineTexts.join('\n');
 }

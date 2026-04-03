@@ -12,3 +12,6 @@ firebase-service-account.json
 *.sqlite
 .DS_Store
 .claude/plans/
+mineru-venv/
+output/
+PDF/
