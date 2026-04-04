@@ -40,7 +40,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
             doc_analyze,
             ocr=True,
             lang='en',
-            formula_enable=True,
+            formula_enable=False,  # disabled: UniMerNet incompatible with current transformers version (cache_position kwarg)
         )
         t2 = time.time()
         print(f'[MinerU Server] Step 1 (model inference): {t2-t1:.1f}s')

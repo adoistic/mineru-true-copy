@@ -7,7 +7,7 @@ CustomPEKModel expects.
 
 Environment variables:
     OPENROUTER_API_KEY  — required
-    OPENROUTER_MODEL_PRIMARY   — optional (default: x-ai/grok-4.1-fast)
+    OPENROUTER_MODEL_PRIMARY   — optional (default: x-ai/grok-4.20)
     OPENROUTER_MODEL_FALLBACK  — optional (default: google/gemini-3.1-flash-lite-preview)
 """
 
@@ -73,7 +73,7 @@ def _get_models(task: str = "extraction") -> list[dict]:
             {
                 "id": os.environ.get(
                     "OPENROUTER_MODEL_OCR_PRIMARY",
-                    "x-ai/grok-4.1-fast",
+                    "x-ai/grok-4.20",
                 ),
                 "label": "primary",
             },
@@ -88,7 +88,7 @@ def _get_models(task: str = "extraction") -> list[dict]:
     # Default: extraction task
     return [
         {
-            "id": os.environ.get("OPENROUTER_MODEL_PRIMARY", "x-ai/grok-4.1-fast"),
+            "id": os.environ.get("OPENROUTER_MODEL_PRIMARY", "x-ai/grok-4.20"),
             "label": "primary",
         },
         {
@@ -99,6 +99,7 @@ def _get_models(task: str = "extraction") -> list[dict]:
             "label": "fallback",
         },
     ]
+
 
 
 def _is_transient(status: int, err_text: str = "") -> bool:
@@ -570,7 +571,8 @@ class VisionLLMOCR:
         h, w = img.shape[:2]
 
         # Skip tiny images that can't contain meaningful text
-        if h < 5 or w < 5:
+        # Some VLM providers reject images below ~10px on either dimension
+        if h < 10 or w < 10:
             return [("[OCR: region unreadable]", 0.0)]
 
         image_b64 = _encode_image(img)
