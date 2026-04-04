@@ -8,6 +8,7 @@
  * (except searchable PDF, which preserves spatial layout).
  */
 import { MineruOutput, MineruPage, MineruRegion, ProcessingOptions } from '@/types';
+import katex from 'katex';
 
 export interface HtmlConversionOptions {
   removeHeadersFooters: boolean;
@@ -115,23 +116,29 @@ export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): s
 
     case 'text':
       if (joinWithPrevious) {
-        return sanitizeFormattedText(region.content).replace(/\n/g, '<br>\n');
+        return sanitizeFormattedText(region.content);
       }
-      return `<p>${sanitizeFormattedText(region.content).replace(/\n/g, '<br>\n')}</p>`;
+      return `<p>${sanitizeFormattedText(region.content)}</p>`;
 
     case 'table': {
-      let tableHtml = convertTable(region);
-      // If table block also has an embedded image, prepend it
-      if (region.img_data && region.img_mime) {
-        const imgTag = `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`;
-        tableHtml = imgTag + '\n' + tableHtml;
-      }
+      const tableHtml = convertTable(region);
+      // Don't prepend table image when structured HTML is available —
+      // image toggle is a future feature (see project_image_toggle.md)
       return tableHtml;
     }
 
     case 'formula':
       if (region.latex) {
-        return `<div class="math-block"><span class="math">${escapeHtml(region.latex)}</span></div>`;
+        try {
+          const html = katex.renderToString(region.latex, {
+            throwOnError: false,
+            displayMode: true,
+            output: 'html',
+          });
+          return `<div class="math-block">${html}</div>`;
+        } catch {
+          return `<div class="math-block"><code>${escapeHtml(region.latex)}</code></div>`;
+        }
       }
       return `<p class="formula">${escapeHtml(region.content)}</p>`;
 
@@ -139,7 +146,7 @@ export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): s
       const imgTag = region.img_data && region.img_mime
         ? `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`
         : '';
-      const caption = region.content ? `<figcaption>${escapeHtml(region.content)}</figcaption>` : '';
+      const caption = region.content ? `<figcaption>${sanitizeFormattedText(region.content)}</figcaption>` : '';
       return `<figure>${imgTag}${caption}</figure>`;
     }
 
@@ -147,7 +154,7 @@ export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): s
       return convertList(region.content);
 
     case 'caption':
-      return `<figcaption>${escapeHtml(region.content)}</figcaption>`;
+      return `<figcaption>${sanitizeFormattedText(region.content)}</figcaption>`;
 
     case 'header':
     case 'footer':
@@ -247,7 +254,7 @@ export function sanitizeTableHtml(html: string): string {
   // Strip disallowed tags (keep their text content)
   const TABLE_ALLOWED_TAGS = new Set([
     'table', 'thead', 'tbody', 'tfoot', 'tr', 'th', 'td', 'caption',
-    'colgroup', 'col', 'strong', 'em', 'u', 'b', 'i',
+    'colgroup', 'col', 'strong', 'em', 'u', 'b', 'i', 'sup', 'sub',
   ]);
   sanitized = sanitized.replace(/<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^>]*>/gi, (match, tagName) => {
     return TABLE_ALLOWED_TAGS.has(tagName.toLowerCase()) ? match : '';
@@ -256,25 +263,106 @@ export function sanitizeTableHtml(html: string): string {
   return sanitized;
 }
 
-export function convertList(content: string): string {
-  // If content already contains HTML list tags, pass through sanitizer instead of re-parsing
-  if (/<ul[\s>]|<ol[\s>]|<li[\s>]/i.test(content)) {
-    return sanitizeFormattedText(content);
+/**
+ * Classify a line's list marker type and nesting level.
+ *
+ * Marker hierarchy (outer → inner):
+ *   Level 0: Arabic numbers — 1. / 1) / (1)
+ *   Level 1: Roman numerals — (i) / (ii) / i. / ii)
+ *   Level 2: Letters — (a) / (b) / a. / a)
+ *   Level 0: Bullets — •, -, *
+ *   Level -1: No marker (continuation text)
+ */
+function classifyListLine(line: string): { level: number; text: string } {
+  const trimmed = line.trim();
+
+  // Arabic numbered: 1. / 1) / (1) / [1]
+  if (/^\d+[.)]\s/.test(trimmed) || /^\(\d+\)\s/.test(trimmed) || /^\[\d+\]\s/.test(trimmed)) {
+    return { level: 0, text: trimmed };
   }
 
+  // Roman numerals: (i) / (ii) / (iii) / (iv) / i) / ii. etc.
+  // Valid roman sequences only (not single letters that could be alphabetical)
+  const romanParenMatch = trimmed.match(/^\(([ivxlcdm]+)\)\s/i);
+  const romanBareMatch = trimmed.match(/^([ivxlcdm]{2,})[.)]\s/i); // 2+ chars = definitely roman
+  const romanSingleMatch = trimmed.match(/^([ivx])[.)]\s/i); // single i/v/x could be roman
+
+  if (romanParenMatch) {
+    const val = romanParenMatch[1].toLowerCase();
+    // Disambiguate: (a)-(h), (j)-(z) are always alphabetical
+    // (i), (v), (x) etc. that are valid roman → treat as roman
+    if (isValidRoman(val)) {
+      return { level: 1, text: trimmed };
+    }
+    // Fall through to alpha check
+  }
+  if (romanBareMatch) {
+    const val = romanBareMatch[1].toLowerCase();
+    if (isValidRoman(val)) {
+      return { level: 1, text: trimmed };
+    }
+  }
+
+  // Uppercase Roman: (I) / (II) / I. / II)
+  const upperRomanParenMatch = trimmed.match(/^\(([IVXLCDM]+)\)\s/);
+  const upperRomanBareMatch = trimmed.match(/^([IVXLCDM]{2,})[.)]\s/);
+  if (upperRomanParenMatch && isValidRoman(upperRomanParenMatch[1].toLowerCase())) {
+    return { level: 1, text: trimmed };
+  }
+  if (upperRomanBareMatch && isValidRoman(upperRomanBareMatch[1].toLowerCase())) {
+    return { level: 1, text: trimmed };
+  }
+
+  // Letters: (a) / (b) / a. / a) / [a]
+  if (/^\([a-zA-Z]\)\s/.test(trimmed) || /^[a-zA-Z][.)]\s/.test(trimmed) || /^\[[a-zA-Z]\]\s/.test(trimmed)) {
+    return { level: 2, text: trimmed };
+  }
+
+  // Bullets
+  if (/^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606*]\s/.test(trimmed)) {
+    return { level: 0, text: trimmed };
+  }
+
+  // Section/Article/Step prefixes
+  if (/^(?:Section|Article|Part|Chapter|Item|Note|Step)\s+\d/i.test(trimmed)) {
+    return { level: 0, text: trimmed };
+  }
+
+  // No marker — continuation text, keep at previous level
+  return { level: -1, text: trimmed };
+}
+
+/**
+ * Check if a string is a valid Roman numeral.
+ */
+function isValidRoman(s: string): boolean {
+  // Match valid roman numeral patterns (i through xxxix covers most list usage)
+  return /^(?:x{0,3})(?:ix|iv|v?i{0,3})$/.test(s) && s.length > 0;
+}
+
+export function convertList(content: string): string {
   const lines = content.split('\n').filter(l => l.trim());
   if (lines.length === 0) return '';
 
-  // Detect ordered vs unordered
-  const isOrdered = lines[0].match(/^\d+[.)]/);
-  const tag = isOrdered ? 'ol' : 'ul';
+  // Classify each line
+  const classified = lines.map(l => classifyListLine(l));
 
-  let html = `<${tag}>\n`;
-  for (const line of lines) {
-    const text = line.replace(/^[\s•\-*]+|^\d+[.)]\s*/, '');
-    html += `<li>${escapeHtml(text)}</li>\n`;
+  // Find the minimum level present (for base indentation)
+  const levels = classified.filter(c => c.level >= 0).map(c => c.level);
+  const minLevel = levels.length > 0 ? Math.min(...levels) : 0;
+
+  // Render as a div with preserved markers and indentation
+  let html = '<div class="list-block">\n';
+  let prevLevel = minLevel;
+  for (const { level, text } of classified) {
+    const effectiveLevel = level >= 0 ? level : prevLevel; // continuation uses prev level
+    const indent = Math.max(0, effectiveLevel - minLevel);
+    const marginLeft = indent * 1.5; // 1.5em per nesting level
+    const style = marginLeft > 0 ? ` style="margin-left:${marginLeft}em"` : '';
+    html += `<p${style}>${sanitizeFormattedText(text)}</p>\n`;
+    if (level >= 0) prevLevel = level;
   }
-  html += `</${tag}>`;
+  html += '</div>';
 
   return html;
 }
@@ -288,7 +376,7 @@ export function escapeHtml(text: string): string {
     .replace(/'/g, '&#39;');
 }
 
-const ALLOWED_TAGS = ['strong', 'em', 'u', 'ul', 'ol', 'li', 'b', 'i'] as const;
+const ALLOWED_TAGS = ['strong', 'em', 'u', 's', 'b', 'i', 'sup', 'sub'] as const;
 
 export function sanitizeFormattedText(text: string): string {
   // Step 1: Escape ALL HTML
@@ -342,7 +430,11 @@ function getDefaultStyles(): string {
     .math-block {
       text-align: center;
       margin: 1em 0;
+      overflow-x: auto;
+    }
+    .math-block code {
       font-family: "JetBrains Mono", monospace;
+      font-size: 0.95em;
     }
     .page-header, .page-footer {
       color: #888;
@@ -365,6 +457,12 @@ function getDefaultStyles(): string {
       font-size: 0.9em;
       color: #666;
       font-style: italic;
+    }
+    .list-block {
+      margin: 0.5em 0 0.5em 1em;
+    }
+    .list-block p {
+      margin: 0.15em 0;
     }
   `;
 }

@@ -30,16 +30,20 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
     """Run full MinerU OCR pipeline and store the structured result."""
     try:
         tasks[task_id]['status'] = 'processing'
+        t_start = time.time()
 
         ds = PymuDocDataset(pdf_bytes, lang='en')
 
         # Step 1: Model inference (layout detection + OCR)
+        t1 = time.time()
         infer_result = ds.apply(
             doc_analyze,
             ocr=True,
             lang='en',
-            formula_enable=False,
+            formula_enable=True,
         )
+        t2 = time.time()
+        print(f'[MinerU Server] Step 1 (model inference): {t2-t1:.1f}s')
 
         # Step 2: Run full pipeline (paragraph merging, heading detection,
         # table extraction, reading order, image extraction)
@@ -49,6 +53,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
         pipe_result = infer_result.pipe_ocr_mode(
             image_writer, debug_mode=True, lang='en'
         )
+        t3 = time.time()
+        print(f'[MinerU Server] Step 2 (pipe_ocr_mode): {t3-t2:.1f}s')
 
         # Step 3: Convert pipeline output to the format the client expects
         raw = pipe_result._pipe_res
@@ -73,14 +79,30 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
             # Use para_blocks (fully processed) over preproc_blocks
             para_blocks = page.get('para_blocks', page.get('preproc_blocks', []))
 
+            # Debug: log block types present on each page
+            block_types = {}
+            for b in para_blocks:
+                bt = b.get('type', 'unknown')
+                block_types[bt] = block_types.get(bt, 0) + 1
+            print(f'[MinerU Server] Page {page_idx}: block types = {block_types}')
+
             blocks = []
             for b in para_blocks:
                 block_type = b.get('type', 'text')
                 bbox = b.get('bbox', [0, 0, 0, 0])
 
+                # Debug: log image/figure blocks
+                if block_type in ('image', 'image_body', 'figure'):
+                    print(f'[MinerU Server] Page {page_idx}: Found {block_type} block, '
+                          f'keys={list(b.keys())}, has blocks={bool(b.get("blocks"))}')
+
                 # Extract content from the nested structure:
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
                 text, table_html, img_path, latex = _extract_block_content(b, img_dir)
+
+                # Detect list content in text blocks
+                if block_type == 'text' and text and _detect_list_content(text):
+                    block_type = 'list'
 
                 block = {
                     'type': block_type,
@@ -102,6 +124,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
                             block['img_data'] = base64.b64encode(f.read()).decode('ascii')
                         ext = os.path.splitext(img_path)[1].lower()
                         block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+                    else:
+                        print(f'[MinerU Server] WARNING: Image file not found: {img_full_path}')
 
                 blocks.append(block)
 
@@ -128,6 +152,168 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
         tasks[task_id]['status'] = 'failed'
         tasks[task_id]['error'] = str(e)
         print(f'[MinerU Server] Task {task_id} failed: {e}')
+
+
+def _is_valid_roman(s: str) -> bool:
+    """Check if a string is a valid Roman numeral (i through xxxix)."""
+    import re
+    return bool(re.match(r'^(?:x{0,3})(?:ix|iv|v?i{0,3})$', s.lower())) and len(s) > 0
+
+
+def _is_list_item(line: str) -> bool:
+    """Detect whether a line starts with any list/bullet/numbering pattern."""
+    import re
+    # Bullets: •○▪▫–—➤‣›▶►∙★☆ etc.
+    if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
+        return True
+    # Arabic numbered: 1. / 1) / (1) / [1]
+    if re.match(r'^\d+[\.\)]\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
+        return True
+    # Letters: (a) / a. / a) / [a]  (excluding roman-ambiguous single letters)
+    if re.match(r'^\([a-zA-Z]\)\s', line) or re.match(r'^\[[a-zA-Z]\]\s', line):
+        return True
+    if re.match(r'^[a-zA-Z][\.\)]\s', line):
+        return True
+    # Roman numerals in parens: (i), (ii), (iii), (iv), (v), (vi), etc.
+    m = re.match(r'^\(([ivxlcdm]+)\)\s', line, re.IGNORECASE)
+    if m and _is_valid_roman(m.group(1)):
+        return True
+    # Bare roman with 2+ chars: ii. / iii) / iv.  (avoids ambiguity with single letters)
+    m = re.match(r'^([ivxlcdm]{2,})[\.\)]\s', line, re.IGNORECASE)
+    if m and _is_valid_roman(m.group(1)):
+        return True
+    # Single roman i/v/x with period/paren — ambiguous, treat as list item
+    # (single 'i.' could be alphabetical, but in list context it usually is roman)
+    if re.match(r'^[ivxIVX][\.\)]\s', line):
+        return True
+    # Section/Article/Part/Chapter/Item/Note/Step prefixes
+    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step)\s+\d', line, re.IGNORECASE):
+        return True
+    return False
+
+
+def _merge_block_text(block: dict) -> str:
+    """Merge text spans from a para_block into flowing prose.
+
+    Adapted from MinerU's merge_para_with_text() (dict2md/ocr_mkcontent.py:177)
+    but designed for HTML-formatted VLM output instead of markdown.
+
+    Key differences from MinerU's version:
+    - No markdown character escaping (we output HTML)
+    - Preserves HTML formatting tags (<strong>, <em>, <sup>, etc.)
+    - Same language-aware spacing (CJK: no space, Western: space)
+    - Same hyphen handling at line ends
+    - Same list line break preservation
+    """
+    import re
+
+    lines = block.get('lines', [])
+    if not lines:
+        # Fallback: use direct text field if no structured lines
+        return block.get('text', '')
+
+    # Collect all plain text to detect language
+    plain_text = ''
+    for line in lines:
+        for span in line.get('spans', []):
+            content = span.get('content', '')
+            if content:
+                plain_text += content
+
+    # Detect language for spacing rules
+    try:
+        from magic_pdf.libs.language import detect_lang
+        block_lang = detect_lang(plain_text)
+    except Exception:
+        block_lang = 'en'  # Default to Western spacing
+
+    cjk_langs = ['zh', 'ja', 'ko']
+    para_text = ''
+
+    for i, line in enumerate(lines):
+        # Preserve list line breaks (MinerU marks these during paragraph splitting)
+        if i >= 1 and line.get('is_list_start_line', False):
+            para_text += '\n'
+
+        spans = line.get('spans', [])
+        for j, span in enumerate(spans):
+            content = span.get('content', '')
+            if not content or not content.strip():
+                continue
+
+            content = content.strip()
+            is_last_span = (j == len(spans) - 1)
+
+            if block_lang in cjk_langs:
+                # CJK: no space between lines within a paragraph,
+                # but add space after inline equations
+                if is_last_span:
+                    para_text += content
+                else:
+                    para_text += f'{content} '
+            else:
+                # Western: add space between spans
+                # Handle hyphenation: if span ends with letter+hyphen, join without space
+                if is_last_span and re.search(r'[A-Za-z]+-\s*$', content):
+                    # Remove trailing hyphen, next line continues the word
+                    para_text += content.rstrip()[:-1]
+                else:
+                    para_text += f'{content} '
+
+    return para_text.strip()
+
+
+def _join_visual_lines(parts: list[str]) -> str:
+    """Join visual text lines into flowing prose (legacy fallback).
+
+    Used when structured block data (lines→spans) is not available.
+    Prefer _merge_block_text() which uses MinerU's structural approach.
+    """
+    if not parts:
+        return ''
+    if len(parts) == 1:
+        return parts[0]
+
+    import re
+    result = [parts[0]]
+    for line in parts[1:]:
+        prev = result[-1]
+        stripped_prev = prev.rstrip()
+        stripped_line = line.strip()
+        if not stripped_line:
+            # Empty line = paragraph break
+            result.append('\n\n')
+            continue
+        # Check if previous line ends with sentence-terminal punctuation
+        ends_sentence = bool(re.search(r'[.!?:;]\s*$', stripped_prev))
+        # Check if current line is a list item
+        is_list = _is_list_item(stripped_line)
+
+        if ends_sentence or is_list:
+            result.append('\n' + line)
+        else:
+            # Mid-sentence line break — join with space
+            # Handle hyphenation: if prev ends with '-', join without space
+            if stripped_prev.endswith('-'):
+                result[-1] = stripped_prev[:-1]
+                result.append(line)
+            else:
+                result.append(' ' + line)
+
+    return ''.join(result)
+
+
+def _detect_list_content(text: str) -> bool:
+    """Check if a text block's content is predominantly list items.
+
+    Returns True if the block should be converted to a 'list' type.
+    """
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    if len(lines) < 2:
+        return False
+    list_count = sum(1 for l in lines if _is_list_item(l))
+    # If at least 60% of lines are list items, treat as list block
+    return list_count / len(lines) >= 0.6
 
 
 def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str]:
@@ -184,8 +370,16 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
     if not text_parts and block.get('text'):
         text_parts = [block['text']]
 
-    # Join text — preserve \n between spans (each span is a visual line)
-    text = '\n'.join(text_parts)
+    # Join visual lines into flowing text.
+    # Use MinerU's structural approach (lines→spans) when available,
+    # falling back to the legacy flat-text heuristic.
+    if block_type in ('text', 'title'):
+        if block.get('lines'):
+            text = _merge_block_text(block)
+        else:
+            text = _join_visual_lines(text_parts)
+    else:
+        text = '\n'.join(text_parts)
 
     return text, table_html, img_path, latex
 

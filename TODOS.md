@@ -118,3 +118,108 @@ Wireframe the multi-file concurrent processing UI:
 - How the center preview handles multiple files (tab per file? click to focus?)
 
 **Deliverable:** Updated wireframe HTML showing multi-file queue in all three tool views.
+
+## CEO Review TODOs (2026-04-03)
+
+### TODO 8: Extract vision_llm_ocr.py from mineru-venv
+**Priority:** P1 (blocks reliable deployment)
+**Effort:** human ~2 hours / CC ~15 min
+
+The customized VisionLLMOCR code (OCR prompt, model routing, concurrency) lives in
+`mineru-venv/lib/.../vision_llm_ocr.py`, which is gitignored. Any `pip install` or
+venv rebuild silently overwrites all custom code. Extract to a tracked project location
+(e.g., `lib/vision_llm_ocr.py`) and monkey-patch MinerU at startup to use the local copy.
+
+**Depends on:** Nothing
+**Blocked by:** Nothing
+
+---
+
+### TODO 9: Fix Gemini 400 errors on OpenRouter
+**Priority:** P1 (performance)
+**Effort:** human ~1 hour / CC ~10 min
+
+`google/gemini-3.1-flash-lite-preview` returns HTTP 400 on every OCR call. Model ID exists
+on OpenRouter but likely fails due to `response_format: {"type": "json_object"}` not being
+supported, or image format requirements. Every OCR call pays wasted latency hitting a broken
+endpoint before falling back to Grok. Investigate root cause, fix or swap to a working Gemini
+model.
+
+**Depends on:** Nothing
+**Blocked by:** Nothing
+
+---
+
+### TODO 10: Add HTML tag allowlist to sanitizeTableHtml
+**Priority:** P1 (security)
+**Effort:** human ~1 hour / CC ~10 min
+
+`sanitizeTableHtml()` strips scripts and event handlers but allows ANY HTML tag through.
+LLM could return `<iframe>`, `<form>`, `<object>` inside table output. Add tag allowlist:
+table, thead, tbody, tr, th, td, caption, strong, em, u, b, i. Strip all other tags.
+
+**Depends on:** Nothing
+**Blocked by:** Nothing
+
+---
+
+### TODO 11: CEO Review accepted fixes bundle
+**Priority:** P1 (quality + security + reliability)
+**Effort:** human ~4 hours / CC ~20 min
+
+Bundle of fixes accepted during CEO review:
+1. Fix event handler regex to catch unquoted attributes: `on\w+=(?:"[^"]*"|'[^']*'|\S+)`
+2. Strip px widths in sanitizeStyleAttribute (keep % only, remove 612px denominator)
+3. Add empty-tasks guard to ThreadPoolExecutor (`if not flat_tasks: return []`)
+4. Add shared threading.Semaphore + random jitter for concurrent OpenRouter requests
+5. Add `[OCR: region unreadable]` marker for failed OCR spans instead of silent empty text
+
+**Depends on:** TODO 8 (extract to tracked file first, then apply Python-side fixes there)
+**Blocked by:** Nothing
+
+---
+
+### TODO 12: Update design doc to reflect single-output implementation
+**Priority:** P3 (documentation debt)
+**Effort:** human ~30 min / CC ~5 min
+
+Design doc at `~/.gstack/projects/adoistic-data-transformation-app/siraj-main-design-*.md`
+describes dual-output (lines + text fields) but implementation uses single-output (formatting
+tags in lines, strip for plain text). Update to match reality.
+
+**Depends on:** Nothing
+**Blocked by:** Nothing
+
+---
+
+### TODO 13: True-Copy HTML Export Mode
+**Priority:** P2 (feature)
+**Effort:** human ~5 days / CC ~2 hours
+
+Add a second HTML export mode that preserves the PDF's exact layout: columns, page numbers,
+absolute positioning. Users processing government/legal documents need a layout-faithful
+digital copy, not just reflowed prose.
+
+**Approach:** Use MinerU bbox data for absolute positioning. Study `@chenglou/pretext` for
+text measurement. Two export modes: "Reflowed" (current, readable) and "True Copy"
+(layout-preserving).
+
+**Depends on:** Current quality fixes (Fixes 1-7) completed first
+**Blocked by:** Nothing
+
+---
+
+### TODO 14: OCR Quality Benchmark Suite
+**Priority:** P3 (tooling)
+**Effort:** human ~2 days / CC ~1 hour
+
+Create automated benchmark measuring OCR accuracy across test documents. Needed to
+objectively evaluate new VLM providers or model versions.
+
+**Metrics:** Character accuracy vs ground truth, formatting tag accuracy, truncation rate,
+429 error count, processing time per page.
+
+**Test documents:** 6 E2E test PDFs (1, 10, 21, 27, 35, 54 pages).
+
+**Depends on:** Nothing
+**Blocked by:** Nothing

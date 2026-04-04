@@ -7,7 +7,7 @@ CustomPEKModel expects.
 
 Environment variables:
     OPENROUTER_API_KEY  — required
-    OPENROUTER_MODEL_PRIMARY   — optional (default: x-ai/grok-4.20)
+    OPENROUTER_MODEL_PRIMARY   — optional (default: x-ai/grok-4.1-fast)
     OPENROUTER_MODEL_FALLBACK  — optional (default: google/gemini-3.1-flash-lite-preview)
 """
 
@@ -23,7 +23,7 @@ import cv2
 import numpy as np
 from loguru import logger
 
-from magic_pdf.model.sub_modules.ocr.paddleocr2pytorch.ocr_utils import (
+from lib.ocr_utils import (
     check_img,
     merge_det_boxes,
     sorted_boxes,
@@ -37,7 +37,21 @@ from magic_pdf.model.sub_modules.ocr.paddleocr2pytorch.ocr_utils import (
 _OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 _MAX_RETRIES = 3
 _BASE_DELAY = 1.0  # seconds
-_API_SEMAPHORE = threading.Semaphore(8)
+_API_SEMAPHORE = threading.Semaphore(30)
+_429_COUNT = 0
+_429_LOCK = threading.Lock()
+
+
+def get_429_count() -> int:
+    """Return the total number of 429 rate limit responses encountered."""
+    return _429_COUNT
+
+
+def reset_429_count():
+    """Reset the 429 counter (call at start of each document)."""
+    global _429_COUNT
+    with _429_LOCK:
+        _429_COUNT = 0
 
 
 def _get_api_key() -> str:
@@ -52,21 +66,21 @@ def _get_models(task: str = "extraction") -> list[dict]:
 
     Task types:
         "extraction" — structured data extraction (Grok primary, Gemini fallback)
-        "ocr"        — text recognition / table OCR (Gemini primary, Grok fallback)
+        "ocr"        — text recognition / table OCR (Grok primary, Gemini fallback)
     """
     if task == "ocr":
         return [
             {
                 "id": os.environ.get(
                     "OPENROUTER_MODEL_OCR_PRIMARY",
-                    "google/gemini-3.1-flash-lite-preview",
+                    "x-ai/grok-4.1-fast",
                 ),
                 "label": "primary",
             },
             {
                 "id": os.environ.get(
                     "OPENROUTER_MODEL_OCR_FALLBACK",
-                    "x-ai/grok-4.20",
+                    "google/gemini-3.1-flash-lite-preview",
                 ),
                 "label": "fallback",
             },
@@ -74,7 +88,7 @@ def _get_models(task: str = "extraction") -> list[dict]:
     # Default: extraction task
     return [
         {
-            "id": os.environ.get("OPENROUTER_MODEL_PRIMARY", "x-ai/grok-4.20"),
+            "id": os.environ.get("OPENROUTER_MODEL_PRIMARY", "x-ai/grok-4.1-fast"),
             "label": "primary",
         },
         {
@@ -94,6 +108,18 @@ def _is_transient(status: int, err_text: str = "") -> bool:
         if token in err_text:
             return True
     return False
+
+
+def _encode_image(img: np.ndarray, max_dim: int = 2048, quality: int = 85) -> str:
+    """Encode a numpy image to a base64 JPEG string for API calls."""
+    h, w = img.shape[:2]
+    if max(h, w) > max_dim:
+        scale = max_dim / max(h, w)
+        img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+    success, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, quality])
+    if not success:
+        raise ValueError("Failed to encode image to JPEG")
+    return base64.b64encode(buf).decode("ascii")
 
 
 def _call_openrouter(image_b64: str, prompt: str, *, max_tokens: int = 4096, json_mode: bool = True, task: str = "extraction") -> str:
@@ -157,9 +183,19 @@ def _call_openrouter(image_b64: str, prompt: str, *, max_tokens: int = 4096, jso
                 with urllib.request.urlopen(req, timeout=120) as resp:
                     data = json.loads(resp.read().decode())
 
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+                choice = data.get("choices", [{}])[0]
+                content = choice.get("message", {}).get("content", "")
                 if not content:
                     raise ValueError(f"{model['label']} returned empty content")
+
+                finish_reason = choice.get("finish_reason", "")
+                if finish_reason == "length":
+                    logger.warning(
+                        f"[VisionLLM] {model['label']} response truncated "
+                        f"(finish_reason=length, max_tokens={max_tokens}). "
+                        f"Output may be incomplete."
+                    )
+
                 return content
 
             except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError) as exc:
@@ -173,6 +209,11 @@ def _call_openrouter(image_b64: str, prompt: str, *, max_tokens: int = 4096, jso
                         err_text = f"{err_text} | {err_body}"
                     except Exception:
                         pass
+                if status == 429:
+                    with _429_LOCK:
+                        global _429_COUNT
+                        _429_COUNT += 1
+                        logger.warning(f"[VisionLLM] 429 rate limit hit (total: {_429_COUNT})")
                 if _is_transient(status, err_text) and attempt < _MAX_RETRIES - 1:
                     delay = _BASE_DELAY * (2 ** attempt) + random.uniform(0, 1.0)
                     logger.warning(
@@ -186,6 +227,108 @@ def _call_openrouter(image_b64: str, prompt: str, *, max_tokens: int = 4096, jso
         logger.warning(f"[VisionLLM] {model['label']} exhausted retries ({last_error}), trying next model")
 
     raise RuntimeError(f"All vision LLM models failed. Last error: {last_error}")
+
+
+# ---------------------------------------------------------------------------
+# VLM Table Extraction (replaces RapidTable)
+# ---------------------------------------------------------------------------
+
+_TABLE_PROMPT = """\
+Extract the table from this image and return it as a clean HTML table.
+
+Rules:
+- Return ONLY an HTML <table> element, nothing else.
+- Each row becomes a <tr>, each cell a <td> (use <th> for header cells).
+- If a cell spans multiple columns or rows, use colspan/rowspan attributes.
+- Preserve all text in every cell exactly as it appears.
+- Use <thead> and <tbody> for semantic grouping when headers are present.
+
+Formatting rules:
+- Use inline CSS styles on elements for visual formatting.
+- Column widths: use PERCENTAGES (e.g., style="width: 25%"), never fixed pixel widths.
+- If the source has colored/shaded rows or columns, preserve with background-color.
+- Reproduce the border pattern from the source document:
+  - Fully bordered -> border on cells
+  - No visible borders -> no border CSS
+  - Partial borders -> selective border-top/border-bottom/border-left/border-right
+- Allowed CSS: width (%), min-width, background-color, border properties,
+  text-align, vertical-align, padding, border-collapse
+- Do NOT use: font-family, font-size, color, position, float, display,
+  margin, !important, class, id, or <style> blocks.
+
+- Do NOT wrap in <html> or <body> tags.
+- Do NOT include any explanation, just the HTML."""
+
+
+class VisionLLMTableModel:
+    """
+    Drop-in replacement for RapidTable that uses a vision LLM
+    to extract table structure from cropped table images.
+    """
+
+    def __init__(self, *args, **kwargs):
+        logger.info("[VisionLLM] Table model initialised (OpenRouter vision)")
+
+    def predict(self, image, *args, **kwargs):
+        """
+        Match RapidTable.predict() interface.
+
+        Returns: (html_code, table_cell_bboxes, logic_points, elapse)
+        """
+        start = time.time()
+        try:
+            img = check_img(image)
+            b64 = _encode_image(img)
+
+            with _API_SEMAPHORE:
+                raw = _call_openrouter(
+                    b64,
+                    _TABLE_PROMPT,
+                    max_tokens=16384,
+                    json_mode=False,
+                    task="extraction",
+                )
+
+            # Strip markdown fences if the model wraps in ```html
+            html = raw.strip()
+            if html.startswith("```"):
+                # Remove first line (```html) and last line (```)
+                lines = html.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                html = "\n".join(lines).strip()
+
+            # Strip <html>/<body> wrappers if the model added them
+            import re
+            html = re.sub(r'</?html[^>]*>', '', html, flags=re.IGNORECASE)
+            html = re.sub(r'</?body[^>]*>', '', html, flags=re.IGNORECASE)
+            html = html.strip()
+
+            # Ensure output ends with </table> — MinerU validates this
+            table_end = html.rfind('</table>')
+            if table_end >= 0:
+                html = html[:table_end + len('</table>')]
+            else:
+                logger.warning(f"[VisionLLM] No </table> found in response. Last 200 chars: {html[-200:]}")
+                # Try to salvage by appending closing tags
+                if '<table' in html:
+                    # Close any open tags and append </table>
+                    html = html.rstrip() + '\n</tbody>\n</table>'
+            # Ensure output starts with <table
+            table_start = html.find('<table')
+            if table_start > 0:
+                html = html[table_start:]
+
+            elapse = time.time() - start
+            logger.info(f"[VisionLLM] Table extracted in {elapse:.1f}s ({len(html)} chars)")
+            return html, [], [], elapse
+
+        except Exception as exc:
+            elapse = time.time() - start
+            logger.warning(f"[VisionLLM] Table extraction failed: {exc}")
+            return "", [], [], elapse
 
 
 # ---------------------------------------------------------------------------
@@ -243,25 +386,21 @@ def _detect_text_lines_cv(img: np.ndarray) -> list[np.ndarray]:
 # ---------------------------------------------------------------------------
 
 _OCR_PROMPT = """\
-Extract ALL text from this image exactly as it appears, preserving each VISUAL line \
-of text as a separate entry. Do NOT merge lines into paragraphs.
+Extract ALL text from this image. Return a JSON object:
 
-Return a JSON object: {"lines": ["line 1 text", "line 2 text", ...]}
+{"lines": ["line 1", "line 2", ...]}
 
 Rules:
-- Each physical/visual line of text in the image becomes one array element.
-- Read left-to-right, top-to-bottom.
+- One array element per visual line of text, top-to-bottom, left-to-right.
 - Preserve original spelling, capitalisation, and punctuation exactly.
-- If the image contains no text, return {"lines": []}.
-
-Formatting rules:
-- If text is bold, wrap it with <strong>...</strong> (NOT <b>).
-- If text is italic, wrap it with <em>...</em> (NOT <i>).
-- If text is underlined, wrap it with <u>...</u>.
-- For unordered lists, use <ul><li>...</li></ul>.
-- For ordered/numbered lists, use <ol><li>...</li></ol>.
-- Do NOT add any CSS, style attributes, or class attributes.
-- Plain text with no formatting is fine — only add tags when formatting is visible.
+- If no text, return {"lines": []}.
+- Bold text: wrap with <strong>...</strong>
+- Italic text: wrap with <em>...</em>
+- Underlined text: wrap with <u>...</u>
+- Strikethrough text: wrap with <s>...</s>
+- Superscript text: wrap with <sup>...</sup>
+- Subscript text: wrap with <sub>...</sub>
+- No other HTML tags. No CSS. No attributes.
 """
 
 
@@ -424,25 +563,17 @@ class VisionLLMOCR:
 
     def _recognise_text(self, img: np.ndarray, expected_lines: int = 0) -> list[tuple[str, float]]:
         """
-        Send image to vision LLM, return list of (text, confidence) tuples.
+        Send image to vision LLM.
+
+        Returns list of (text, confidence) tuples — one per visual line.
         """
         h, w = img.shape[:2]
 
         # Skip tiny images that can't contain meaningful text
         if h < 5 or w < 5:
-            return []
+            return [("[OCR: region unreadable]", 0.0)]
 
-        # Downscale large images to keep base64 payload reasonable
-        max_dim = 2048
-        if max(h, w) > max_dim:
-            scale = max_dim / max(h, w)
-            img = cv2.resize(img, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-
-        # Encode image to JPEG (much smaller than PNG) for faster upload
-        success, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 85])
-        if not success:
-            raise ValueError("Failed to encode image")
-        image_b64 = base64.b64encode(buf).decode("ascii")
+        image_b64 = _encode_image(img)
 
         raw = _call_openrouter(image_b64, _OCR_PROMPT, task="ocr")
 
@@ -461,11 +592,13 @@ class VisionLLMOCR:
             return [(raw.strip(), 0.9)]
 
         lines = data.get("lines", [])
+
         if not lines:
             # Maybe the model returned text directly
             if isinstance(data, dict) and "text" in data:
                 return [(data["text"], 0.95)]
-            return []
+            logger.warning("[VisionLLM] empty response for region — marking unreadable")
+            return [("[OCR: region unreadable]", 0.0)]
 
         results = []
         for line in lines:
@@ -478,6 +611,10 @@ class VisionLLMOCR:
             for sub in text.split("\n"):
                 if sub.strip():
                     results.append((sub.strip(), 0.95))
+
+        if not results:
+            logger.warning("[VisionLLM] all lines empty for region — marking unreadable")
+            return [("[OCR: region unreadable]", 0.0)]
 
         return results
 

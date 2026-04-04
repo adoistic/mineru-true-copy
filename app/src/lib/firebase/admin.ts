@@ -8,10 +8,10 @@ if (fs.existsSync(parentEnvPath)) {
   require('dotenv').config({ path: parentEnvPath });
 }
 
-let initialized = false;
-
 function getApp(): admin.app.App {
-  if (initialized) {
+  // Check the SDK's own app registry — survives Next.js hot-reloads
+  // where module-level variables get reset but the process stays alive.
+  if (admin.apps.length > 0) {
     return admin.app();
   }
 
@@ -34,7 +34,6 @@ function getApp(): admin.app.App {
     admin.initializeApp({
       credential: admin.credential.cert(serviceAccount),
     });
-    initialized = true;
     console.log('[Firebase] Admin SDK initialized');
   } catch (err) {
     console.error('[Firebase] Failed to initialize:', err);

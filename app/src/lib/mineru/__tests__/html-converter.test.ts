@@ -36,9 +36,10 @@ describe('sanitizeFormattedText', () => {
     );
   });
 
-  it('5. allows <ul><li>item</li></ul> and <ol><li>item</li></ol>', () => {
-    expect(sanitizeFormattedText('<ul><li>item</li></ul>')).toBe('<ul><li>item</li></ul>');
-    expect(sanitizeFormattedText('<ol><li>item</li></ol>')).toBe('<ol><li>item</li></ol>');
+  it('5. allows <s>strikethrough</s> and escapes list tags', () => {
+    expect(sanitizeFormattedText('<s>deleted</s>')).toBe('<s>deleted</s>');
+    // List tags are NOT in ALLOWED_TAGS — they get escaped
+    expect(sanitizeFormattedText('<ul><li>item</li></ul>')).toContain('&lt;ul&gt;');
   });
 
   it('6. escapes <script>alert("xss")</script>', () => {
@@ -72,6 +73,22 @@ describe('sanitizeFormattedText', () => {
 
   it('11. text with &, <, > entities (not part of allowed tags) is escaped', () => {
     expect(sanitizeFormattedText('A & B < C > D')).toBe('A &amp; B &lt; C &gt; D');
+  });
+
+  it('12s. allows <sup>text</sup> through for superscripts', () => {
+    expect(sanitizeFormattedText('x<sup>2</sup> + y<sup>3</sup>')).toBe(
+      'x<sup>2</sup> + y<sup>3</sup>'
+    );
+  });
+
+  it('13s. allows <sub>text</sub> through for subscripts', () => {
+    expect(sanitizeFormattedText('H<sub>2</sub>O')).toBe('H<sub>2</sub>O');
+  });
+
+  it('14s. allows nested sup/sub with other formatting', () => {
+    expect(sanitizeFormattedText('<strong>x<sup>2</sup></strong>')).toBe(
+      '<strong>x<sup>2</sup></strong>'
+    );
   });
 });
 
@@ -165,23 +182,41 @@ describe('sanitizeTableHtml', () => {
     expect(result).toContain('<strong>bold</strong>');
     expect(result).toContain('<td>');
   });
+
+  it('27s. keeps <sup> and <sub> inside <td>', () => {
+    const result = sanitizeTableHtml('<td>10<sup>6</sup> cells/mL</td>');
+    expect(result).toContain('<sup>6</sup>');
+    expect(result).toContain('<td>');
+    const result2 = sanitizeTableHtml('<td>H<sub>2</sub>O</td>');
+    expect(result2).toContain('<sub>2</sub>');
+  });
 });
 
 // --- convertList tests ---
 
 describe('convertList', () => {
-  it('20. content with <ul><li> tags passes through sanitizer (not double-wrapped)', () => {
-    const result = convertList('<ul><li>item one</li><li>item two</li></ul>');
-    expect(result).toBe('<ul><li>item one</li><li>item two</li></ul>');
-    // Should NOT have nested <ul><ul>
-    expect(result).not.toContain('<ul><ul>');
+  it('20. numbered list preserves markers and renders as list-block', () => {
+    const result = convertList('1. First item\n2. Second item\n3. Third item');
+    expect(result).toContain('list-block');
+    expect(result).toContain('1. First item');
+    expect(result).toContain('3. Third item');
   });
 
-  it('21. plain text list content uses existing parsing logic', () => {
+  it('21. bullet list preserves markers', () => {
     const result = convertList('• Item one\n• Item two');
-    expect(result).toContain('<ul>');
-    expect(result).toContain('<li>Item one</li>');
-    expect(result).toContain('<li>Item two</li>');
+    expect(result).toContain('list-block');
+    expect(result).toContain('• Item one');
+    expect(result).toContain('• Item two');
+  });
+
+  it('22. nested roman/letter items get indentation', () => {
+    const result = convertList('(i) Question one\n(a) Option A\n(b) Option B\n(ii) Question two');
+    expect(result).toContain('list-block');
+    // Roman numerals at level 1, letters at level 2 — letters should have more margin
+    expect(result).toContain('margin-left');
+    expect(result).toContain('(i) Question one');
+    expect(result).toContain('(a) Option A');
+    expect(result).toContain('(ii) Question two');
   });
 });
 
@@ -192,6 +227,41 @@ describe('regionToHtml', () => {
     const region = makeRegion({ type: 'text', content: 'Hello world' });
     const result = regionToHtml(region, false);
     expect(result).toBe('<p>Hello world</p>');
+  });
+
+  it('28s. formula with valid LaTeX renders via KaTeX', () => {
+    const region = makeRegion({
+      type: 'formula',
+      content: 'E equals mc squared',
+      latex: 'E = mc^2',
+    });
+    const result = regionToHtml(region, false);
+    expect(result).toContain('math-block');
+    // KaTeX output should NOT contain raw LaTeX
+    expect(result).not.toContain('E = mc^2');
+    // Should not fall back to <code>
+    expect(result).not.toContain('<code>');
+  });
+
+  it('29s. formula with malformed LaTeX does not crash', () => {
+    const region = makeRegion({
+      type: 'formula',
+      content: 'bad formula',
+      latex: '\\frac{',
+    });
+    // Should not throw
+    const result = regionToHtml(region, false);
+    expect(result).toContain('math-block');
+  });
+
+  it('30s. formula without latex field falls back to escaped content', () => {
+    const region = makeRegion({
+      type: 'formula',
+      content: 'x^2 + y^2 = z^2',
+    });
+    const result = regionToHtml(region, false);
+    expect(result).toContain('formula');
+    expect(result).toContain('x^2 + y^2 = z^2');
   });
 
   it('23. figure block with base64 image data renders img tag', () => {
