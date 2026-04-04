@@ -1,6 +1,6 @@
 /**
  * Data Extraction Pipeline: PDF pages → rasterized images → LLM → structured JSON
- * Pages are rasterized at 120 DPI JPEG regardless of PDF type.
+ * Pages are rasterized at 150 DPI JPEG regardless of PDF type.
  */
 import { Job, PipelineProgress, ExtractionOptions } from '@/types';
 import { Pipeline, PipelineResult } from './types';
@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 
 const MAX_PAGES = 10;
-const DPI = 120;
+const DPI = 150;
 
 export class ExtractionPipeline implements Pipeline {
   name = 'Extraction';

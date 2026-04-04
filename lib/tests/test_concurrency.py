@@ -45,13 +45,13 @@ class TestSemaphore:
         # Semaphore doesn't expose its value directly, but we can check
         # by acquiring and releasing
         acquired = 0
-        for _ in range(20):
+        for _ in range(30):
             if _API_SEMAPHORE.acquire(blocking=False):
                 acquired += 1
         # Release all
         for _ in range(acquired):
             _API_SEMAPHORE.release()
-        assert acquired == 20, f"Expected semaphore value 20, got {acquired}"
+        assert acquired == 30, f"Expected semaphore value 30, got {acquired}"
 
     def test_semaphore_limits_concurrent_calls(self):
         """Verify that _API_SEMAPHORE actually gates concurrent VLM calls."""
@@ -60,7 +60,8 @@ class TestSemaphore:
         max_concurrent = 0
         current_concurrent = 0
         lock = threading.Lock()
-        barrier = threading.Barrier(21, timeout=5)
+        sem_value = _API_SEMAPHORE._value
+        barrier = threading.Barrier(sem_value + 1, timeout=5)
 
         def _worker():
             nonlocal max_concurrent, current_concurrent
@@ -73,15 +74,16 @@ class TestSemaphore:
                 with lock:
                     current_concurrent -= 1
 
-        # Launch 25 threads — only 20 should run concurrently
-        threads = [threading.Thread(target=_worker) for _ in range(25)]
+        # Launch more threads than semaphore allows
+        thread_count = sem_value + 5
+        threads = [threading.Thread(target=_worker) for _ in range(thread_count)]
         for t in threads:
             t.start()
         for t in threads:
             t.join(timeout=10)
 
-        assert max_concurrent <= 20, f"Semaphore allowed {max_concurrent} concurrent, expected max 20"
-        assert max_concurrent >= 15, f"Only {max_concurrent} concurrent, expected close to 20"
+        assert max_concurrent <= sem_value, f"Semaphore allowed {max_concurrent} concurrent, expected max {sem_value}"
+        assert max_concurrent >= sem_value - 5, f"Only {max_concurrent} concurrent, expected close to {sem_value}"
 
 
 # ---------------------------------------------------------------------------

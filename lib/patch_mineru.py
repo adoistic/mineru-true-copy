@@ -228,7 +228,7 @@ def patch():
                     if expected_ending:
                         table_res_dict['table_res']['html'] = html_code
 
-            max_workers = min(len(table_res_list_all_page), 10)
+            max_workers = min(len(table_res_list_all_page), 30)
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(_process_table, t) for t in table_res_list_all_page]
                 for f in as_completed(futures):
@@ -281,6 +281,54 @@ def patch():
         return images_layout_res
 
     batch_analyze.BatchAnalyze.__call__ = _patched_call
+
+    # 4. Fix UniMerNet / transformers 4.38+ incompatibility.
+    #
+    # transformers>=4.38 injects `cache_position` into model_inputs during
+    # generation. VisionEncoderDecoderModel.forward() passes it to the decoder,
+    # but UnimerMBartForCausalLM.forward() doesn't accept it (no **kwargs).
+    # Patch: accept and discard cache_position.
+    try:
+        from magic_pdf.model.sub_modules.mfr.unimernet.unimernet_hf.unimer_mbart.modeling_unimer_mbart import UnimerMBartForCausalLM
+
+        _original_unimer_forward = UnimerMBartForCausalLM.forward
+
+        def _patched_unimer_forward(self, *args, cache_position=None, **kwargs):
+            return _original_unimer_forward(self, *args, **kwargs)
+
+        UnimerMBartForCausalLM.forward = _patched_unimer_forward
+        logger.info('[patch_mineru] Patched UnimerMBartForCausalLM.forward for cache_position compat')
+
+        # Also patch UnimerMBartDecoder.forward to handle DynamicCache.
+        # transformers 4.38+ uses DynamicCache instead of tuple-of-tuples for
+        # past_key_values. UnimerMBartDecoder.forward() at line 1419 does:
+        #   past_key_values[0][0].shape[2]
+        # which crashes when DynamicCache entries are None on first pass.
+        from magic_pdf.model.sub_modules.mfr.unimernet.unimernet_hf.unimer_mbart.modeling_unimer_mbart import UnimerMBartDecoder
+
+        _original_decoder_forward = UnimerMBartDecoder.forward
+
+        def _patched_decoder_forward(self, *args, past_key_values=None, **kwargs):
+            # Convert DynamicCache to None if it has no cached values yet
+            if past_key_values is not None:
+                try:
+                    # DynamicCache: check if it has any real content
+                    if hasattr(past_key_values, 'get_seq_length'):
+                        if past_key_values.get_seq_length() == 0:
+                            past_key_values = None
+                    elif isinstance(past_key_values, (list, tuple)):
+                        # Tuple format: check if first entry is valid
+                        if len(past_key_values) > 0 and past_key_values[0] is not None:
+                            if past_key_values[0][0] is None:
+                                past_key_values = None
+                except (IndexError, AttributeError):
+                    past_key_values = None
+            return _original_decoder_forward(self, *args, past_key_values=past_key_values, **kwargs)
+
+        UnimerMBartDecoder.forward = _patched_decoder_forward
+        logger.info('[patch_mineru] Patched UnimerMBartDecoder.forward for DynamicCache compat')
+    except ImportError:
+        logger.warning('[patch_mineru] UniMerNet not found, skipping cache_position patch')
 
 
 patch()
