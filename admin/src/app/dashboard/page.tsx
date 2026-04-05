@@ -218,9 +218,9 @@ function maskKey(key: string): string {
   return `${parts[0]}-****-****-${parts[3]}`;
 }
 
-function formatDate(ts: { seconds: number } | null): string {
+function formatDate(ts: string | null): string {
   if (!ts) return "--";
-  return new Date(ts.seconds * 1000).toLocaleDateString("en-US", {
+  return new Date(ts).toLocaleDateString("en-US", {
     year: "numeric",
     month: "short",
     day: "numeric",
@@ -290,7 +290,7 @@ export default function DashboardPage() {
   // Stats
   const totalKeys = keys.length;
   const activeKeys = keys.filter((k) => k.status === "active").length;
-  const totalCredits = keys.reduce((sum, k) => sum + (k.credits || 0), 0);
+  const totalCredits = keys.reduce((sum, k) => sum + (k.credit_balance || 0), 0);
 
   const handleRevoke = async (keyId: string) => {
     if (!confirm("Revoke this key? The client will lose access immediately."))
@@ -425,13 +425,13 @@ export default function DashboardPage() {
                       className="border-b border-slate-100 transition-colors hover:bg-slate-50"
                     >
                       <td className="px-4 py-3 font-mono text-xs text-slate-700">
-                        {maskKey(k.key)}
+                        {k.key}
                       </td>
                       <td className="px-4 py-3 text-slate-900">
                         {k.client_label}
                       </td>
                       <td className="px-4 py-3 text-slate-900">
-                        {k.credits?.toLocaleString() ?? 0}
+                        {k.credit_balance?.toLocaleString() ?? 0}
                       </td>
                       <td className="px-4 py-3">
                         <StatusBadge status={k.status} />
@@ -440,11 +440,7 @@ export default function DashboardPage() {
                         {k.device_id || "--"}
                       </td>
                       <td className="px-4 py-3 text-slate-500">
-                        {formatDate(
-                          k.created_at as unknown as {
-                            seconds: number;
-                          } | null
-                        )}
+                        {formatDate(k.created_at)}
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-2">

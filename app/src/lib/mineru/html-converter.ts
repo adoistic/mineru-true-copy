@@ -15,6 +15,14 @@ export interface HtmlConversionOptions {
   removeMetadata: boolean;
   joinBrokenPages: boolean;
   pageRange?: { start: number; end: number };
+  formulaDisplay?: 'rendered' | 'image';
+  tableDisplay?: 'rendered' | 'image';
+}
+
+interface RegionRenderOptions {
+  joinWithPrevious: boolean;
+  formulaDisplay: 'rendered' | 'image';
+  tableDisplay: 'rendered' | 'image';
 }
 
 export function mineruToHtml(output: MineruOutput, options: HtmlConversionOptions): string {
@@ -33,6 +41,8 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
   htmlParts.push('<body>');
 
   let previousPageEndedMidSentence = false;
+  const formulaDisplay = options.formulaDisplay ?? 'rendered';
+  const tableDisplay = options.tableDisplay ?? 'rendered';
 
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
@@ -42,7 +52,7 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
     const sorted = sortByReadingOrder(regions);
 
     for (const region of sorted) {
-      const html = regionToHtml(region, previousPageEndedMidSentence);
+      const html = regionToHtml(region, { joinWithPrevious: previousPageEndedMidSentence, formulaDisplay, tableDisplay });
       if (html) {
         htmlParts.push(html);
         previousPageEndedMidSentence = false;
@@ -68,13 +78,15 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
 export function mineruToHtmlBody(output: MineruOutput, options: HtmlConversionOptions): string {
   const pages = filterPages(output.pages, options.pageRange);
   const htmlParts: string[] = [];
+  const formulaDisplay = options.formulaDisplay ?? 'rendered';
+  const tableDisplay = options.tableDisplay ?? 'rendered';
 
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
     const sorted = sortByReadingOrder(regions);
 
     for (const region of sorted) {
-      const html = regionToHtml(region, false);
+      const html = regionToHtml(region, { joinWithPrevious: false, formulaDisplay, tableDisplay });
       if (html) htmlParts.push(html);
     }
   }
@@ -107,7 +119,7 @@ function sortByReadingOrder(regions: MineruRegion[]): MineruRegion[] {
   });
 }
 
-export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): string {
+export function regionToHtml(region: MineruRegion, options: RegionRenderOptions): string {
   switch (region.type) {
     case 'title': {
       const level = region.level && region.level >= 1 && region.level <= 6 ? region.level : 1;
@@ -115,32 +127,40 @@ export function regionToHtml(region: MineruRegion, joinWithPrevious: boolean): s
     }
 
     case 'text':
-      if (joinWithPrevious) {
+      if (options.joinWithPrevious) {
         return sanitizeFormattedText(region.content);
       }
       return `<p>${sanitizeFormattedText(region.content)}</p>`;
 
     case 'table': {
+      if (options.tableDisplay === 'image' && region.img_data && region.img_mime) {
+        return `<div class="table-image"><img src="data:${region.img_mime};base64,${region.img_data}" alt="Table" style="max-width:100%"></div>`;
+      }
       const tableHtml = convertTable(region);
-      // Don't prepend table image when structured HTML is available —
-      // image toggle is a future feature (see project_image_toggle.md)
       return tableHtml;
     }
 
-    case 'formula':
-      if (region.latex) {
+    case 'formula': {
+      if (options.formulaDisplay === 'image' && region.img_data && region.img_mime) {
+        return `<div class="math-block"><img src="data:${region.img_mime};base64,${region.img_data}" alt="Formula" style="max-width:100%"></div>`;
+      }
+      // Use region.latex if available, otherwise fall back to region.content
+      // (MinerU stores equation LaTeX in span.content, not span.latex)
+      const latexSource = region.latex || region.content;
+      if (latexSource) {
         try {
-          const html = katex.renderToString(region.latex, {
+          const html = katex.renderToString(latexSource, {
             throwOnError: false,
             displayMode: true,
             output: 'html',
           });
           return `<div class="math-block">${html}</div>`;
         } catch {
-          return `<div class="math-block"><code>${escapeHtml(region.latex)}</code></div>`;
+          return `<div class="math-block"><code>${escapeHtml(latexSource)}</code></div>`;
         }
       }
-      return `<p class="formula">${escapeHtml(region.content)}</p>`;
+      return '';
+    }
 
     case 'figure': {
       const imgTag = region.img_data && region.img_mime
@@ -395,6 +415,20 @@ export function sanitizeFormattedText(text: string): string {
       `</${tag}>`
     );
   }
+
+  // Step 3: Render inline LaTeX ($...$) with KaTeX
+  // MinerU wraps inline equation spans with $...$ delimiters
+  result = result.replace(/\$([^$]+)\$/g, (_match, latex) => {
+    try {
+      return katex.renderToString(latex, {
+        throwOnError: false,
+        displayMode: false,
+        output: 'html',
+      });
+    } catch {
+      return `<code class="math-inline">${latex}</code>`;
+    }
+  });
 
   return result;
 }

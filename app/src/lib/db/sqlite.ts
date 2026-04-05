@@ -78,6 +78,13 @@ function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_jobs_type ON jobs(job_type);
     CREATE INDEX IF NOT EXISTS idx_recent_files_date ON recent_files(processed_at DESC);
   `);
+
+  // Add output_files column if not exists (migration for existing DBs)
+  try {
+    db.exec(`ALTER TABLE jobs ADD COLUMN output_files TEXT NOT NULL DEFAULT '[]'`);
+  } catch {
+    // Column already exists
+  }
 }
 
 // Job operations
@@ -128,8 +135,11 @@ export function updateJobStatus(jobId: string, status: JobStatus, extra?: Partia
   const values: unknown[] = [status];
 
   if (status === 'processing' && !extra?.started_at) {
-    updates.push('started_at = ?');
-    values.push(new Date().toISOString());
+    const currentJob = getJob(jobId);
+    if (!currentJob?.started_at) {
+      updates.push('started_at = ?');
+      values.push(new Date().toISOString());
+    }
   }
 
   if (status === 'completed' || status === 'failed' || status === 'permanently_failed') {
@@ -162,6 +172,16 @@ export function updateJobStatus(jobId: string, status: JobStatus, extra?: Partia
     values.push(extra.retry_count);
   }
 
+  if (extra?.credits_reserved !== undefined) {
+    updates.push('credits_reserved = ?');
+    values.push(extra.credits_reserved);
+  }
+
+  if ((extra as Record<string, unknown>)?.output_files !== undefined) {
+    updates.push('output_files = ?');
+    values.push(JSON.stringify((extra as Record<string, unknown>).output_files));
+  }
+
   values.push(jobId);
   db.prepare(`UPDATE jobs SET ${updates.join(', ')} WHERE id = ?`).run(...values);
 }
@@ -170,7 +190,11 @@ export function getJob(jobId: string): Job | null {
   const db = getDb();
   const row = db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId) as Record<string, unknown> | undefined;
   if (!row) return null;
-  return { ...row, tool_config: JSON.parse(row.tool_config as string) } as Job;
+  return {
+    ...row,
+    tool_config: JSON.parse(row.tool_config as string),
+    output_files: row.output_files ? JSON.parse(row.output_files as string) : [],
+  } as Job;
 }
 
 export function getActiveJobs(): Job[] {

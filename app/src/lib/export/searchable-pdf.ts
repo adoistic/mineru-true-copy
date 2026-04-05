@@ -1,3 +1,4 @@
+// @ts-nocheck — pdf-lib internal APIs used for raw operator access
 /**
  * Searchable PDF: overlays invisible text at exact bounding box positions
  * on top of the original scanned page images.

@@ -7,7 +7,6 @@ import {
   query,
   where,
   orderBy,
-  Timestamp,
   increment,
 } from "firebase/firestore";
 import { getDb } from "./firebase";
@@ -16,12 +15,12 @@ export interface ActivationKey {
   id: string;
   key: string;
   client_label: string;
-  credits: number;
+  credit_balance: number;
   status: "active" | "revoked" | "expired";
   device_id: string | null;
-  created_at: Timestamp;
-  expires_at: Timestamp | null;
-  whitelabel: boolean;
+  created_at: string;
+  expires_at: string | null;
+  can_whitelabel: boolean;
 }
 
 export interface UsageLog {
@@ -29,7 +28,7 @@ export interface UsageLog {
   key_id: string;
   action: string;
   credits_used: number;
-  timestamp: Timestamp;
+  timestamp: string;
 }
 
 function generateKey(): string {
@@ -61,12 +60,12 @@ export async function createKey(params: {
   const docRef = await addDoc(collection(getDb(), "keys"), {
     key,
     client_label: params.client_label,
-    credits: params.credits,
+    credit_balance: params.credits,
     status: "active",
     device_id: null,
-    created_at: Timestamp.now(),
-    expires_at: params.expires_at ? Timestamp.fromDate(params.expires_at) : null,
-    whitelabel: params.whitelabel,
+    created_at: new Date().toISOString(),
+    expires_at: params.expires_at ? params.expires_at.toISOString() : null,
+    can_whitelabel: params.whitelabel,
   });
   return docRef.id;
 }
@@ -77,7 +76,7 @@ export async function topUpCredits(
 ): Promise<void> {
   const keyRef = doc(getDb(), "keys", keyId);
   await updateDoc(keyRef, {
-    credits: increment(amount),
+    credit_balance: increment(amount),
   });
 }
 

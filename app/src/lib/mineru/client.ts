@@ -227,7 +227,9 @@ function mapBlockType(type: string): MineruOutput['pages'][0]['regions'][0]['typ
     'list': 'list',
     'caption': 'caption',
     'interline_equation': 'formula',
+    'inline_equation': 'formula',
     'image': 'figure',
+    'image_body': 'figure',
   };
   return typeMap[type] || 'text';
 }

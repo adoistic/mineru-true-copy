@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default permissions for DocTransform","local":true,"windows":["main"],"permissions":["core:default","shell:allow-spawn","shell:allow-execute","shell:default","dialog:default","fs:default"]}}

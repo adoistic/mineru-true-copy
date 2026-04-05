@@ -16,3 +16,11 @@ mineru-venv/
 output/
 PDF/
 .claude/worktrees/
+test-venv/
+test-outputs/
+scripts/.cache/
+src-tauri/binaries/
+src-tauri/resources/node-standalone/
+src-tauri/resources/node-runtime/
+src-tauri/resources/models/
+app/.claude/

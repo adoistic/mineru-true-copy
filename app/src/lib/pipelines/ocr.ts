@@ -67,20 +67,24 @@ export class OcrPipeline implements Pipeline {
       removeMetadata: config.remove_metadata ?? false,
       joinBrokenPages: config.join_broken_pages ?? false,
       pageRange: config.page_range,
+      formulaDisplay: config.formula_display ?? 'rendered' as const,
+      tableDisplay: config.table_display ?? 'rendered' as const,
     };
 
     // Step 4: Export to selected formats
+    const baseName = `${path.parse(job.file_name).name}_${job.id.slice(0, 8)}`;
+
     const outputFiles = await exportAll({
       mineruOutput,
       htmlOptions,
       formats: config.output_formats,
       outputFolder: config.output_folder,
-      baseName: path.parse(job.file_name).name,
+      baseName,
       originalPdfPath: job.file_path,
     });
 
     // Save raw MinerU JSON for reference
-    const jsonPath = path.join(config.output_folder, `${path.parse(job.file_name).name}_mineru.json`);
+    const jsonPath = path.join(config.output_folder, `${baseName}_mineru.json`);
     fs.writeFileSync(jsonPath, JSON.stringify(mineruOutput, null, 2));
 
     return {

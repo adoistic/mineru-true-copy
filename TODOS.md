@@ -223,3 +223,41 @@ objectively evaluate new VLM providers or model versions.
 
 **Depends on:** Nothing
 **Blocked by:** Nothing
+
+## Distribution TODOs (2026-04-04)
+
+### TODO 15: Apple Developer Code Signing + Notarization
+**Priority:** P2 (blocks public distribution)
+**Effort:** human ~1 day / CC ~30 min
+
+Without code signing, macOS Gatekeeper blocks the app on first launch. Users must
+right-click > Open to bypass, which is unacceptable for non-technical clients.
+
+**Steps:**
+1. Enroll in Apple Developer Program ($99/year)
+2. Generate Developer ID Application certificate
+3. Configure Tauri's `bundle.macOS.signing` in `tauri.conf.json`
+4. Add `notarytool` submission to build script
+5. Test: download .dmg on a clean Mac, double-click launches without Gatekeeper warning
+
+**Depends on:** Working .dmg build (Phase 6)
+**Blocked by:** Apple Developer account
+
+---
+
+### TODO 16: Sidecar Process Watchdog with Auto-Restart
+**Priority:** P2 (reliability)
+**Effort:** human ~4 hours / CC ~20 min
+
+If MinerU or Node.js sidecar crashes mid-session, the app becomes non-functional with no
+recovery path. Add a watchdog that:
+
+1. Monitors sidecar health endpoints every 10s
+2. Detects crash (3 consecutive failed health checks)
+3. Auto-restarts the crashed sidecar (max 3 retries)
+4. Updates footer status indicator to show "Restarting..." (amber)
+5. After 3 failed restarts: show user-visible error with "Restart App" button
+6. Logs crash events for debugging
+
+**Depends on:** Sidecar management in main.rs (Phase 4)
+**Blocked by:** Nothing

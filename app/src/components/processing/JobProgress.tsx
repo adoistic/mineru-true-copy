@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import type { JobStatus } from "@/types";
 
 interface JobProgressProps {
@@ -12,7 +12,7 @@ interface JobProgressProps {
 interface JobData {
   id: string;
   status: JobStatus;
-  current_page: number;
+  completed_pages: number;
   total_pages: number;
   message?: string;
   output_files?: string[];
@@ -25,40 +25,57 @@ export default function JobProgress({
   onError,
 }: JobProgressProps) {
   const [job, setJob] = useState<JobData | null>(null);
-  const [polling, setPolling] = useState(true);
-
-  const fetchJob = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/jobs?id=${jobId}`);
-      if (!res.ok) throw new Error("Failed to fetch job status");
-      const data: JobData = await res.json();
-      setJob(data);
-
-      if (data.status === "completed") {
-        setPolling(false);
-        onComplete?.(data.output_files ?? []);
-      } else if (
-        data.status === "failed" ||
-        data.status === "permanently_failed"
-      ) {
-        setPolling(false);
-        onError?.(data.error_message ?? "Processing failed.");
-      }
-    } catch {
-      // Silently retry on network errors
-    }
-  }, [jobId, onComplete, onError]);
+  // Refs to prevent race conditions:
+  // - callbacks ref: avoids useCallback/useEffect churn when parent re-renders
+  // - settled ref: synchronous guard against double-fire (setState is async)
+  const callbacksRef = useRef({ onComplete, onError });
+  callbacksRef.current = { onComplete, onError };
+  const settledRef = useRef(false);
 
   useEffect(() => {
+    settledRef.current = false;
+  }, [jobId]);
+
+  useEffect(() => {
+    let active = true;
+
+    async function fetchJob() {
+      try {
+        const res = await fetch(`/api/jobs?id=${jobId}`);
+        if (!res.ok || !active) return;
+        const data: JobData = await res.json();
+        if (!active) return;
+        setJob(data);
+
+        // Synchronous guard: only fire callbacks once per job
+        if (settledRef.current) return;
+
+        if (data.status === "completed") {
+          settledRef.current = true;
+          callbacksRef.current.onComplete?.(data.output_files ?? []);
+        } else if (
+          data.status === "failed" ||
+          data.status === "permanently_failed"
+        ) {
+          settledRef.current = true;
+          callbacksRef.current.onError?.(data.error_message ?? "Processing failed.");
+        }
+      } catch {
+        // Silently retry on network errors
+      }
+    }
+
     fetchJob();
-    if (!polling) return;
     const interval = setInterval(fetchJob, 2000);
-    return () => clearInterval(interval);
-  }, [fetchJob, polling]);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [jobId]);
 
   const progress =
     job && job.total_pages > 0
-      ? Math.round((job.current_page / job.total_pages) * 100)
+      ? Math.round((job.completed_pages / job.total_pages) * 100)
       : 0;
 
   const statusColor =
@@ -83,7 +100,7 @@ export default function JobProgress({
         </span>
         {job && job.total_pages > 0 && (
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            Page {job.current_page} / {job.total_pages}
+            Page {job.completed_pages} / {job.total_pages}
           </span>
         )}
       </div>

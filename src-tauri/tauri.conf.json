@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "identifier": "com.doctransform.app",
   "build": {
-    "beforeDevCommand": "cd app && npm run dev",
+    "beforeDevCommand": "",
     "devUrl": "http://localhost:3000",
     "beforeBuildCommand": "cd app && npm run build",
-    "frontendDist": "../app/.next/standalone"
+    "frontendDist": "splash.html"
   },
   "app": {
     "windows": [
@@ -34,7 +34,9 @@
       "icons/256x256.png",
       "icons/icon.icns",
       "icons/icon.png"
-    ]
+    ],
+    "externalBin": [],
+    "resources": []
   },
   "plugins": {
     "shell": {

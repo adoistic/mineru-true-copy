@@ -72,16 +72,10 @@ def patch():
     # Simplest approach: patch the batch_analyze source to use a higher
     # threshold. We do this by replacing the __call__ method.
     import types
-    import inspect
 
-    src = inspect.getsource(batch_analyze.BatchAnalyze.__call__)
-    # Replace the 0.25 threshold with 0.80
-    if 'ratio > 0.25' in src:
-        new_src = src.replace('ratio > 0.25', 'ratio > 0.80')
-        # We can't easily re-compile the method from source in a clean way,
-        # so instead we directly patch the compiled code object.
-        # Fall back to a simpler approach: override the entire method.
-        pass
+    # Note: inspect.getsource() is not available in PyInstaller bundles,
+    # but the source check below was dead code anyway (just `pass`).
+    # The actual patch is the _patched_call method replacement below.
 
     # Direct approach: copy and patch the method
     def _patched_call(self, images_with_extra_info):

@@ -4,35 +4,67 @@ import { ActivationKey, UsageLog, JobType } from '@/types';
 const KEYS_COLLECTION = 'keys';
 const USAGE_COLLECTION = 'usage_logs';
 
+// Helper to read credit_balance from either field name (app uses credit_balance, admin uses credits)
+function readCreditBalance(data: Record<string, unknown>): number {
+  return (data.credit_balance as number) ?? (data.credits as number) ?? 0;
+}
+
+function readCreditsReserved(data: Record<string, unknown>): number {
+  return (data.credits_reserved as number) ?? 0;
+}
+
+// Resolve a keyId (could be doc ID or key string) to the actual Firestore doc ref
+async function resolveKeyRef(db: FirebaseFirestore.Firestore, keyId: string) {
+  // Try by document ID first
+  const docRef = db.collection(KEYS_COLLECTION).doc(keyId);
+  const doc = await docRef.get();
+  if (doc.exists) return { ref: docRef, doc };
+
+  // Fallback: lookup by key field
+  const snapshot = await db.collection(KEYS_COLLECTION)
+    .where('key', '==', keyId)
+    .limit(1)
+    .get();
+  if (snapshot.empty) return null;
+  return { ref: snapshot.docs[0].ref, doc: snapshot.docs[0] };
+}
+
 export async function reserveCredits(keyId: string, amount: number, jobId: string): Promise<{
   success: boolean;
   error?: string;
 }> {
   const db = getFirestore();
-  const keyRef = db.collection(KEYS_COLLECTION).doc(keyId);
 
   try {
+    // Resolve the key ref first (outside transaction for the query fallback)
+    const resolved = await resolveKeyRef(db, keyId);
+    if (!resolved) throw new Error('Key not found');
+
+    const keyRef = resolved.ref;
+
     await db.runTransaction(async (tx) => {
       const doc = await tx.get(keyRef);
       if (!doc.exists) throw new Error('Key not found');
 
-      const data = doc.data() as ActivationKey;
+      const data = doc.data() as Record<string, unknown>;
 
       if (data.status !== 'active') {
         throw new Error('Key is not active');
       }
 
-      if (new Date(data.expires_at) < new Date()) {
+      if (data.expires_at && new Date(data.expires_at as string) < new Date()) {
         throw new Error('Key has expired');
       }
 
-      const available = data.credit_balance - data.credits_reserved;
+      const balance = readCreditBalance(data);
+      const reserved = readCreditsReserved(data);
+      const available = balance - reserved;
       if (available < amount) {
         throw new Error(`Insufficient credits. Need ${amount}, available ${available}`);
       }
 
       tx.update(keyRef, {
-        credits_reserved: data.credits_reserved + amount,
+        credits_reserved: reserved + amount,
         updated_at: new Date().toISOString(),
       });
     });
@@ -54,19 +86,26 @@ export async function finalizeCredits(keyId: string, params: {
   errorMessage?: string;
 }): Promise<void> {
   const db = getFirestore();
-  const keyRef = db.collection(KEYS_COLLECTION).doc(keyId);
+
+  // Resolve the key ref first
+  const resolved = await resolveKeyRef(db, keyId);
+  if (!resolved) throw new Error('Key not found');
+  const keyRef = resolved.ref;
 
   await db.runTransaction(async (tx) => {
     const doc = await tx.get(keyRef);
     if (!doc.exists) throw new Error('Key not found');
 
-    const data = doc.data() as ActivationKey;
+    const data = doc.data() as Record<string, unknown>;
+    const balance = readCreditBalance(data);
+    const reserved = readCreditsReserved(data);
 
     // Release reservation and charge actual amount
-    const refund = params.creditsReserved - params.creditsCharged;
+    const newBalance = balance - params.creditsCharged;
+    const newReserved = Math.max(0, reserved - params.creditsReserved);
     tx.update(keyRef, {
-      credit_balance: data.credit_balance - params.creditsCharged,
-      credits_reserved: Math.max(0, data.credits_reserved - params.creditsReserved),
+      credit_balance: newBalance,
+      credits_reserved: newReserved,
       updated_at: new Date().toISOString(),
     });
   });
@@ -92,14 +131,27 @@ export async function getBalance(keyId: string): Promise<{
   available: number;
 } | null> {
   const db = getFirestore();
-  const doc = await db.collection(KEYS_COLLECTION).doc(keyId).get();
-  if (!doc.exists) return null;
 
-  const data = doc.data() as ActivationKey;
+  // Try by document ID first
+  let doc = await db.collection(KEYS_COLLECTION).doc(keyId).get();
+
+  // If not found, try looking up by the key field (handles key string vs doc ID)
+  if (!doc.exists) {
+    const snapshot = await db.collection(KEYS_COLLECTION)
+      .where('key', '==', keyId)
+      .limit(1)
+      .get();
+    if (snapshot.empty) return null;
+    doc = snapshot.docs[0];
+  }
+
+  const data = doc.data() as Record<string, unknown>;
+  const balance = readCreditBalance(data);
+  const reserved = readCreditsReserved(data);
   return {
-    balance: data.credit_balance,
-    reserved: data.credits_reserved,
-    available: data.credit_balance - data.credits_reserved,
+    balance,
+    reserved,
+    available: balance - reserved,
   };
 }
 

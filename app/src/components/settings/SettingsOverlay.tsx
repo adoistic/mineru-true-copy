@@ -38,6 +38,19 @@ export default function SettingsOverlay({
     []
   );
 
+  const handleBrowse = useCallback(async () => {
+    try {
+      const res = await fetch("/api/browse", { method: "POST" });
+      const data = await res.json();
+      if (data.path) {
+        setOutputFolder(data.path);
+        localStorage.setItem("default_output_folder", data.path);
+      }
+    } catch {
+      // User cancelled or error
+    }
+  }, []);
+
   const handleDeactivate = useCallback(() => {
     if (!confirmDeactivate) {
       setConfirmDeactivate(true);
@@ -114,7 +127,10 @@ export default function SettingsOverlay({
                 placeholder="/path/to/output"
                 className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
               />
-              <button className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800">
+              <button
+                onClick={handleBrowse}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+              >
                 Browse
               </button>
             </div>

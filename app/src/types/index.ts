@@ -24,6 +24,7 @@ export interface Job {
   total_pages: number;
   completed_pages: number;
   output_folder: string;
+  output_files?: string[];
 }
 
 export interface ActivationKey {
@@ -131,6 +132,8 @@ export interface ProcessingOptions {
   output_formats: ExportFormat[];
   output_folder: string;
   fix_headings?: boolean;
+  formula_display?: 'rendered' | 'image';  // default 'rendered'
+  table_display?: 'rendered' | 'image';    // default 'rendered'
 }
 
 export interface ExtractionOptions {

@@ -16,7 +16,7 @@ const DEFAULT_SCHEMA = `{
 }`;
 
 export default function ExtractionTool() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [schema, setSchema] = useState(DEFAULT_SCHEMA);
   const [prompt, setPrompt] = useState("");
   const [outputFolder, setOutputFolder] = useState(() =>
@@ -31,12 +31,15 @@ export default function ExtractionTool() {
   const [selectedTemplate, setSelectedTemplate] = useState("");
   const [templateName, setTemplateName] = useState("");
   const [showSaveTemplate, setShowSaveTemplate] = useState(false);
-  const [jobId, setJobId] = useState<string | null>(null);
+  const [jobIds, setJobIds] = useState<string[]>([]);
+  const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
-  const [completed, setCompleted] = useState(false);
-  const [outputFiles, setOutputFiles] = useState<string[]>([]);
+  const [completedCount, setCompletedCount] = useState(0);
+  const [allOutputFiles, setAllOutputFiles] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [schemaError, setSchemaError] = useState<string | null>(null);
+
+  const allComplete = jobIds.length > 0 && completedCount >= jobIds.length;
 
   // Load saved templates from localStorage
   useEffect(() => {
@@ -109,7 +112,7 @@ export default function ExtractionTool() {
   }, []);
 
   const handleProcess = useCallback(async () => {
-    if (!file) return;
+    if (files.length === 0) return;
     try {
       JSON.parse(schema);
     } catch {
@@ -119,80 +122,134 @@ export default function ExtractionTool() {
 
     setProcessing(true);
     setError(null);
-    setCompleted(false);
+    setCompletedCount(0);
+    setAllOutputFiles([]);
+    setJobIds([]);
+    setJobFileNames([]);
 
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append(
-        "config",
-        JSON.stringify({
-          job_type: "extract",
-          schema: JSON.parse(schema),
-          prompt,
-          output_formats: Array.from(outputFormats),
-          output_folder: outputFolder,
-        })
-      );
+    const keyId = localStorage.getItem("key_id") ?? "";
+    const ids: string[] = [];
+    const names: string[] = [];
 
-      const keyId = localStorage.getItem("key_id") ?? "";
-      const res = await fetch("/api/jobs", {
-        method: "POST",
-        headers: { "x-key-id": keyId },
-        body: formData,
-      });
+    for (const file of files) {
+      try {
+        const formData = new FormData();
+        formData.append("file", file);
+        formData.append(
+          "config",
+          JSON.stringify({
+            job_type: "extract",
+            schema: JSON.parse(schema),
+            prompt,
+            output_formats: Array.from(outputFormats),
+            output_folder: outputFolder,
+          })
+        );
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => null);
-        throw new Error(data?.error ?? "Failed to start extraction.");
+        const res = await fetch("/api/jobs", {
+          method: "POST",
+          headers: { "x-key-id": keyId },
+          body: formData,
+        });
+
+        if (!res.ok) {
+          const data = await res.json().catch(() => null);
+          throw new Error(
+            data?.error ?? `Failed to start extraction for ${file.name}.`
+          );
+        }
+
+        const data = await res.json();
+        ids.push(data.job_id ?? data.id);
+        names.push(file.name);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to start extraction."
+        );
+        // Continue with remaining files
       }
-
-      const data = await res.json();
-      setJobId(data.job_id ?? data.id);
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Failed to start extraction."
-      );
-      setProcessing(false);
     }
-  }, [file, schema, prompt, outputFormats, outputFolder]);
 
-  const handleComplete = useCallback((files: string[]) => {
-    setOutputFiles(files);
-    setCompleted(true);
-    setProcessing(false);
+    if (ids.length === 0) {
+      setProcessing(false);
+      return;
+    }
+
+    setJobIds(ids);
+    setJobFileNames(names);
+  }, [files, schema, prompt, outputFormats, outputFolder]);
+
+  const handleJobComplete = useCallback((outputFiles: string[]) => {
+    setAllOutputFiles((prev) => [...prev, ...outputFiles]);
+    setCompletedCount((prev) => prev + 1);
   }, []);
 
   const handleJobError = useCallback((msg: string) => {
-    setError(msg);
-    setProcessing(false);
+    setError((prev) => (prev ? `${prev}\n${msg}` : msg));
+    setCompletedCount((prev) => prev + 1);
   }, []);
 
+  const handleBrowse = useCallback(async () => {
+    try {
+      const res = await fetch("/api/browse", { method: "POST" });
+      const data = await res.json();
+      if (data.path) {
+        setOutputFolder(data.path);
+        localStorage.setItem("default_output_folder", data.path);
+      }
+    } catch {
+      // User cancelled or error
+    }
+  }, []);
+
+  const handleOpenOutputFolder = useCallback(async () => {
+    const folder =
+      outputFolder ||
+      allOutputFiles[0]?.split("/").slice(0, -1).join("/");
+    if (!folder) return;
+    await fetch("/api/open-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: folder }),
+    });
+  }, [outputFolder, allOutputFiles]);
+
   const handleReset = useCallback(() => {
-    setFile(null);
-    setJobId(null);
+    setFiles([]);
+    setJobIds([]);
+    setJobFileNames([]);
     setProcessing(false);
-    setCompleted(false);
-    setOutputFiles([]);
+    setCompletedCount(0);
+    setAllOutputFiles([]);
     setError(null);
   }, []);
 
-  if (jobId && processing) {
+  if (jobIds.length > 0 && processing && !allComplete) {
     return (
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
           Extracting Data
         </h2>
-        <JobProgress
-          jobId={jobId}
-          onComplete={handleComplete}
-          onError={handleJobError}
-        />
+        <p className="text-sm text-slate-500 dark:text-slate-400">
+          {completedCount} of {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} complete
+        </p>
+        {jobIds.map((id, i) => (
+          <div key={id}>
+            <p className="mb-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+              {jobFileNames[i]}
+            </p>
+            <JobProgress
+              jobId={id}
+              onComplete={handleJobComplete}
+              onError={handleJobError}
+            />
+          </div>
+        ))}
       </div>
     );
   }
 
-  if (completed) {
+  if (allComplete) {
     return (
       <div className="space-y-4">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
@@ -214,12 +271,12 @@ export default function ExtractionTool() {
               />
             </svg>
             <span className="text-sm font-medium text-green-800 dark:text-green-300">
-              Data extraction completed successfully
+              {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} extracted successfully
             </span>
           </div>
-          {outputFiles.length > 0 && (
+          {allOutputFiles.length > 0 && (
             <ul className="mb-4 space-y-1">
-              {outputFiles.map((f, i) => (
+              {allOutputFiles.map((f, i) => (
                 <li
                   key={i}
                   className="text-xs text-green-700 dark:text-green-400"
@@ -230,7 +287,10 @@ export default function ExtractionTool() {
             </ul>
           )}
           <div className="flex gap-2">
-            <button className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700">
+            <button
+              onClick={handleOpenOutputFolder}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+            >
               Open Output Folder
             </button>
             <button
@@ -241,6 +301,12 @@ export default function ExtractionTool() {
             </button>
           </div>
         </div>
+
+        {error && (
+          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+            {error}
+          </p>
+        )}
       </div>
     );
   }
@@ -251,7 +317,7 @@ export default function ExtractionTool() {
         Data Extraction
       </h2>
 
-      <FileDropZone onFileSelected={setFile} disabled={processing} />
+      <FileDropZone onFilesSelected={setFiles} disabled={processing} />
 
       <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
         <h3 className="text-sm font-medium text-slate-900 dark:text-white">
@@ -377,7 +443,10 @@ export default function ExtractionTool() {
               placeholder="/path/to/output"
               className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
             />
-            <button className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800">
+            <button
+              onClick={handleBrowse}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+            >
               Browse
             </button>
           </div>
@@ -392,10 +461,10 @@ export default function ExtractionTool() {
 
       <button
         onClick={handleProcess}
-        disabled={!file || outputFormats.size === 0 || !!schemaError}
+        disabled={files.length === 0 || outputFormats.size === 0 || !!schemaError}
         className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Process
+        Process{files.length > 1 ? ` ${files.length} Files` : ""}
       </button>
     </div>
   );

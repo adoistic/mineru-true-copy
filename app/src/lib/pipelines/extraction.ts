@@ -84,7 +84,7 @@ export class ExtractionPipeline implements Pipeline {
     });
 
     // Step 4: Write outputs
-    const baseName = path.parse(job.file_name).name;
+    const baseName = `${path.parse(job.file_name).name}_${job.id.slice(0, 8)}`;
     const outputFiles: string[] = [];
 
     if (!fs.existsSync(config.output_folder)) {
