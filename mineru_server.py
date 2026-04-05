@@ -181,6 +181,11 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
         t3b = time.time()
         print(f'[MinerU Server] Step 2b (equation crops): {t3b-t3:.1f}s')
 
+        # Step 2c: Assign heading hierarchy (H1-H6) to title blocks
+        _assign_heading_levels(pdf_info_raw)
+        t3c = time.time()
+        print(f'[MinerU Server] Step 2c (heading hierarchy): {t3c-t3b:.1f}s')
+
         # Step 3: Convert pipeline output to the format the client expects
         # img_dir is where MinerU wrote extracted images
         _current_img_dir = img_dir
@@ -233,6 +238,10 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
                     'text': text,
                 }
 
+                # Include heading level for title blocks
+                if block_type == 'title' and 'level' in b:
+                    block['level'] = b['level']
+
                 if table_html:
                     block['table_html'] = table_html
                 if latex:
@@ -265,6 +274,9 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
 
         tasks[task_id]['status'] = 'completed'
         tasks[task_id]['result'] = result
+        # Store pipe_result for native export methods (content_list, markdown)
+        tasks[task_id]['_pipe_result'] = pipe_result
+        tasks[task_id]['_img_dir'] = img_dir
 
         total_blocks = sum(len(p['preproc_blocks']) for p in pages)
         print(f'[MinerU Server] Task {task_id} completed: '
@@ -317,121 +329,14 @@ def _is_list_item(line: str) -> bool:
     return False
 
 
-def _merge_block_text(block: dict) -> str:
-    """Merge text spans from a para_block into flowing prose.
+def _unescape_markdown(text: str) -> str:
+    """Remove MinerU's markdown escaping for characters we render as HTML.
 
-    Adapted from MinerU's merge_para_with_text() (dict2md/ocr_mkcontent.py:177)
-    but designed for HTML-formatted VLM output instead of markdown.
-
-    Key differences from MinerU's version:
-    - No markdown character escaping (we output HTML)
-    - Preserves HTML formatting tags (<strong>, <em>, <sup>, etc.)
-    - Same language-aware spacing (CJK: no space, Western: space)
-    - Same hyphen handling at line ends
-    - Same list line break preservation
+    MinerU's ocr_escape_special_markdown_char() escapes: * ` ~ $
+    We un-escape *, `, ~ (not needed in HTML output) but KEEP \\$ escaped
+    to prevent KaTeX false matches with dollar signs in financial docs.
     """
-    import re
-
-    lines = block.get('lines', [])
-    if not lines:
-        # Fallback: use direct text field if no structured lines
-        return block.get('text', '')
-
-    # Collect all plain text to detect language
-    plain_text = ''
-    for line in lines:
-        for span in line.get('spans', []):
-            content = span.get('content', '')
-            if content:
-                plain_text += content
-
-    # Detect language for spacing rules
-    try:
-        from magic_pdf.libs.language import detect_lang
-        block_lang = detect_lang(plain_text)
-    except Exception:
-        block_lang = 'en'  # Default to Western spacing
-
-    cjk_langs = ['zh', 'ja', 'ko']
-    para_text = ''
-
-    for i, line in enumerate(lines):
-        # Preserve list line breaks (MinerU marks these during paragraph splitting)
-        if i >= 1 and line.get('is_list_start_line', False):
-            para_text += '\n'
-
-        spans = line.get('spans', [])
-        for j, span in enumerate(spans):
-            content = span.get('content', '')
-            if not content or not content.strip():
-                continue
-
-            content = content.strip()
-            span_type = span.get('type', '')
-            is_last_span = (j == len(spans) - 1)
-
-            # Wrap inline/interline equations with $...$ delimiters
-            # so the HTML converter can render them with KaTeX
-            if span_type in (ContentType.InlineEquation, ContentType.InterlineEquation):
-                content = f'${content}$'
-
-            if block_lang in cjk_langs:
-                # CJK: no space between lines within a paragraph,
-                # but add space after inline equations
-                if is_last_span:
-                    para_text += content
-                else:
-                    para_text += f'{content} '
-            else:
-                # Western: add space between spans
-                # Handle hyphenation: if span ends with letter+hyphen, join without space
-                if is_last_span and re.search(r'[A-Za-z]+-\s*$', content):
-                    # Remove trailing hyphen, next line continues the word
-                    para_text += content.rstrip()[:-1]
-                else:
-                    para_text += f'{content} '
-
-    return para_text.strip()
-
-
-def _join_visual_lines(parts: list[str]) -> str:
-    """Join visual text lines into flowing prose (legacy fallback).
-
-    Used when structured block data (lines→spans) is not available.
-    Prefer _merge_block_text() which uses MinerU's structural approach.
-    """
-    if not parts:
-        return ''
-    if len(parts) == 1:
-        return parts[0]
-
-    import re
-    result = [parts[0]]
-    for line in parts[1:]:
-        prev = result[-1]
-        stripped_prev = prev.rstrip()
-        stripped_line = line.strip()
-        if not stripped_line:
-            # Empty line = paragraph break
-            result.append('\n\n')
-            continue
-        # Check if previous line ends with sentence-terminal punctuation
-        ends_sentence = bool(re.search(r'[.!?:;]\s*$', stripped_prev))
-        # Check if current line is a list item
-        is_list = _is_list_item(stripped_line)
-
-        if ends_sentence or is_list:
-            result.append('\n' + line)
-        else:
-            # Mid-sentence line break — join with space
-            # Handle hyphenation: if prev ends with '-', join without space
-            if stripped_prev.endswith('-'):
-                result[-1] = stripped_prev[:-1]
-                result.append(line)
-            else:
-                result.append(' ' + line)
-
-    return ''.join(result)
+    return text.replace('\\*', '*').replace('\\`', '`').replace('\\~', '~')
 
 
 def _detect_list_content(text: str) -> bool:
@@ -448,75 +353,155 @@ def _detect_list_content(text: str) -> bool:
 
 
 def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str]:
-    """
-    Extract all content from a para_block, including nested blocks.
+    """Extract content from a para_block using MinerU's native merge_para_with_text.
 
     Returns: (text, table_html, img_path, latex)
     """
+    from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
+
     block_type = block.get('type', 'text')
-    text_parts = []
     table_html = ''
     img_path = ''
     latex = ''
 
-    # Collect spans from all nested structures:
-    # para_block may have:
-    #   - direct lines[].spans[]
-    #   - nested blocks[].lines[].spans[] (for tables, images)
+    # Collect spans from all nested structures for table/image/latex extraction
     all_spans = []
-
-    # Direct lines
     for line in block.get('lines', []):
-        for span in line.get('spans', []):
-            all_spans.append(span)
-
-    # Nested blocks (tables have blocks[] containing table_body, table_caption, etc.)
+        all_spans.extend(line.get('spans', []))
     for inner_block in block.get('blocks', []):
         for line in inner_block.get('lines', []):
-            for span in line.get('spans', []):
-                all_spans.append(span)
+            all_spans.extend(line.get('spans', []))
 
-    # Process all spans
     for span in all_spans:
         span_type = span.get('type', '')
-
-        # Table HTML
         if span.get('html'):
             table_html = span['html']
-
-        # Image path
         if span.get('image_path'):
             img_path = span['image_path']
-
-        # LaTeX — MinerU stores equation LaTeX in span['content'], not span['latex']
-        # (see magic_model.py lines 727-730: span['content'] = layout_det['latex'])
         if span_type in (ContentType.InterlineEquation, ContentType.InlineEquation):
             latex = span.get('content', '') or span.get('latex', '')
         elif span.get('latex'):
             latex = span['latex']
 
-        # Text content
-        content = span.get('content', '')
-        if content and content.strip():
-            text_parts.append(content)
-
-    # Direct text field (fallback)
-    if not text_parts and block.get('text'):
-        text_parts = [block['text']]
-
-    # Join visual lines into flowing text.
-    # Use MinerU's structural approach (lines→spans) when available,
-    # falling back to the legacy flat-text heuristic.
-    if block_type in ('text', 'title'):
-        if block.get('lines'):
-            text = _merge_block_text(block)
-        else:
-            text = _join_visual_lines(text_parts)
+    # Use MinerU's native text merging for text/title blocks
+    if block_type in ('text', 'title', 'list', 'index') and block.get('lines'):
+        text = _unescape_markdown(merge_para_with_text(block))
+    elif block.get('text'):
+        text = block['text']
     else:
+        # Fallback: concatenate span content
+        text_parts = [s.get('content', '') for s in all_spans if s.get('content', '').strip()]
         text = '\n'.join(text_parts)
 
     return text, table_html, img_path, latex
 
+
+
+def _assign_heading_levels(pdf_info: list):
+    """Assign H1-H6 levels to title blocks using height clustering + numbering regex.
+
+    Heuristic approach (no LLM needed):
+    1. Collect avg line height for each title block across all pages
+    2. Cluster unique heights with ~2px tolerance
+    3. Map clusters to H1-H6 (largest height = H1)
+    4. Use numbering patterns as tiebreaker (e.g. "1.1.1" → depth 3)
+    5. Enforce contiguity (no jumping levels)
+    """
+    import re
+
+    # Step 1: Collect all title blocks with their average line heights
+    title_entries = []  # [(block_ref, avg_height, text)]
+    for page in pdf_info:
+        for block in page.get('para_blocks', page.get('preproc_blocks', [])):
+            if block.get('type') != 'title':
+                continue
+            # Calculate avg line height from line bboxes
+            heights = []
+            text = ''
+            for line in block.get('lines', []):
+                bbox = line.get('bbox')
+                if bbox and len(bbox) >= 4:
+                    heights.append(bbox[3] - bbox[1])
+                for span in line.get('spans', []):
+                    text += span.get('content', '')
+            if heights:
+                avg_h = sum(heights) / len(heights)
+                title_entries.append((block, avg_h, text.strip()))
+
+    if not title_entries:
+        return
+
+    # Step 2: Cluster unique heights with ~2px tolerance
+    unique_heights = sorted(set(h for _, h, _ in title_entries), reverse=True)
+    clusters = []  # list of representative heights, largest first
+    for h in unique_heights:
+        merged = False
+        for i, rep in enumerate(clusters):
+            if abs(h - rep) <= 2.0:
+                # Merge into existing cluster (keep the average)
+                clusters[i] = (rep + h) / 2
+                merged = True
+                break
+        if not merged:
+            clusters.append(h)
+
+    # Step 3: Map clusters to H1-H6 (largest = H1, capped at 6 levels)
+    clusters.sort(reverse=True)
+    height_to_level = {}
+    for idx, rep in enumerate(clusters[:6]):
+        level = idx + 1
+        height_to_level[rep] = level
+
+    def _get_level_for_height(h):
+        """Find which cluster this height belongs to."""
+        best_level = len(clusters[:6])  # default to deepest
+        best_dist = float('inf')
+        for rep, level in height_to_level.items():
+            dist = abs(h - rep)
+            if dist < best_dist:
+                best_dist = dist
+                best_level = level
+        return best_level
+
+    # Step 4: Numbering regex as depth indicator (tiebreaker)
+    def _numbering_depth(text):
+        """Detect section numbering depth: "1.2.3" → 3, "Chapter 1" → 1, None if no pattern."""
+        # Dotted numbering: 1.2.3.4
+        m = re.match(r'^(\d+(?:\.\d+)*)\s', text)
+        if m:
+            return m.group(1).count('.') + 1
+        # Chapter/Part/Section prefix
+        if re.match(r'^(?:Chapter|Part)\s+\d', text, re.IGNORECASE):
+            return 1
+        if re.match(r'^(?:Section|Article)\s+\d', text, re.IGNORECASE):
+            return 2
+        return None
+
+    # Step 5: Assign levels
+    for block, avg_h, text in title_entries:
+        level = _get_level_for_height(avg_h)
+        # Use numbering depth as tiebreaker when heights are ambiguous
+        num_depth = _numbering_depth(text)
+        if num_depth is not None:
+            # Only override if numbering suggests a different level AND heights
+            # are close (within same cluster or adjacent)
+            if abs(num_depth - level) <= 1:
+                level = num_depth
+        block['level'] = min(level, 6)
+
+    # Step 6: Enforce contiguity — no jumping from H1 to H4
+    levels_used = sorted(set(b['level'] for b, _, _ in title_entries))
+    if levels_used:
+        # Remap to contiguous: if we have [1, 3, 5] → [1, 2, 3]
+        remap = {old: new for new, old in enumerate(levels_used, 1)}
+        for block, _, _ in title_entries:
+            block['level'] = min(remap.get(block['level'], block['level']), 6)
+
+    level_counts = {}
+    for block, _, text in title_entries:
+        l = block['level']
+        level_counts[l] = level_counts.get(l, 0) + 1
+    print(f'[MinerU Server] Heading hierarchy: {len(title_entries)} titles, levels: {level_counts}')
 
 
 def _is_poor_table_html(html: str) -> bool:
@@ -586,12 +571,22 @@ class MineruHandler(BaseHTTPRequestHandler):
 
         # GET /tasks/{task_id}
         if parsed.path.startswith('/tasks/'):
-            task_id = parsed.path.split('/tasks/')[-1].strip('/')
+            path_parts = parsed.path.strip('/').split('/')
+            task_id = path_parts[1] if len(path_parts) >= 2 else ''
             task = tasks.get(task_id)
             if not task:
                 self._send_json(404, {'error': 'Task not found'})
                 return
-            self._send_json(200, task)
+
+            # GET /tasks/{id}/export/{format} — native MinerU exports
+            if len(path_parts) >= 4 and path_parts[2] == 'export':
+                export_format = path_parts[3]
+                self._handle_export(task, export_format)
+                return
+
+            # Return task without internal Python objects
+            safe_task = {k: v for k, v in task.items() if not k.startswith('_')}
+            self._send_json(200, safe_task)
             return
 
         self._send_json(404, {'error': 'Not found'})
@@ -610,6 +605,36 @@ class MineruHandler(BaseHTTPRequestHandler):
             return
 
         self._send_json(404, {'error': 'Not found'})
+
+    def _handle_export(self, task: dict, export_format: str):
+        """Handle native MinerU export: content_list, markdown, plaintext."""
+        from magic_pdf.config.make_content_config import MakeMode
+
+        if task['status'] != 'completed':
+            self._send_json(400, {'error': f'Task not completed (status: {task["status"]})'})
+            return
+
+        pipe_result = task.get('_pipe_result')
+        img_dir = task.get('_img_dir', '')
+        if not pipe_result:
+            self._send_json(400, {'error': 'Export data not available (task may have been cleaned up)'})
+            return
+
+        try:
+            if export_format == 'content_list':
+                content = pipe_result.get_content_list(img_dir)
+                self._send_json(200, {'format': 'content_list', 'data': content})
+            elif export_format == 'markdown':
+                content = pipe_result.get_markdown(img_dir, md_make_mode=MakeMode.MM_MD)
+                self._send_json(200, {'format': 'markdown', 'data': content})
+            elif export_format == 'plaintext':
+                content = pipe_result.get_markdown(img_dir, md_make_mode=MakeMode.NLP_MD)
+                self._send_json(200, {'format': 'plaintext', 'data': content})
+            else:
+                self._send_json(400, {'error': f'Unknown export format: {export_format}. Use: content_list, markdown, plaintext'})
+        except Exception as e:
+            traceback.print_exc()
+            self._send_json(500, {'error': f'Export failed: {str(e)}'})
 
     def _handle_file_parse(self):
         """Parse multipart form data and start processing."""

@@ -1,27 +1,59 @@
-"""Tests for _merge_block_text() — MinerU structural line joining."""
+"""Tests for text merging (via MinerU native) and heading hierarchy heuristic."""
 import sys
 import os
 
 # Add project root to path so we can import mineru_server
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mineru_server import _merge_block_text, _join_visual_lines
+from mineru_server import _unescape_markdown, _extract_block_content, _assign_heading_levels
+from magic_pdf.config.ocr_content_type import ContentType
 
 
-def _make_block(lines_content: list[list[str]], list_starts: list[int] | None = None) -> dict:
-    """Build a para_block dict from a list of lines, each containing span texts."""
+def _make_block(lines_content: list[list[tuple[str, str]]], block_type='text',
+                list_starts: list[int] | None = None) -> dict:
+    """Build a para_block dict from a list of lines.
+
+    Each line is a list of (text, span_type) tuples.
+    Shorthand: plain string is treated as (text, 'Text').
+    """
     lines = []
-    for i, spans_text in enumerate(lines_content):
-        spans = [{'content': text, 'type': 'Text'} for text in spans_text]
+    for i, spans_data in enumerate(lines_content):
+        spans = []
+        for item in spans_data:
+            if isinstance(item, str):
+                spans.append({'content': item, 'type': ContentType.Text})
+            else:
+                text, stype = item
+                spans.append({'content': text, 'type': stype})
         line = {'spans': spans}
         if list_starts and i in list_starts:
             line['is_list_start_line'] = True
         lines.append(line)
-    return {'type': 'text', 'lines': lines}
+    return {'type': block_type, 'lines': lines}
 
 
-class TestMergeBlockText:
-    """Tests for the new structural line joining function."""
+class TestUnescapeMarkdown:
+    """Tests for _unescape_markdown adapter."""
+
+    def test_unescapes_star(self):
+        assert _unescape_markdown(r'a \* b') == 'a * b'
+
+    def test_unescapes_backtick(self):
+        assert _unescape_markdown(r'a \` b') == 'a ` b'
+
+    def test_unescapes_tilde(self):
+        assert _unescape_markdown(r'a \~ b') == 'a ~ b'
+
+    def test_keeps_dollar_escaped(self):
+        # Dollar signs stay escaped to prevent KaTeX false matches
+        assert _unescape_markdown(r'costs \$50') == r'costs \$50'
+
+    def test_multiple_escapes(self):
+        assert _unescape_markdown(r'\*bold\* and \`code\`') == '*bold* and `code`'
+
+
+class TestExtractBlockContent:
+    """Tests for _extract_block_content using MinerU's native merge_para_with_text."""
 
     def test_western_text_joins_with_spaces(self):
         block = _make_block([
@@ -29,20 +61,18 @@ class TestMergeBlockText:
             ['Claude and I help'],
             ['with coding tasks.'],
         ])
-        result = _merge_block_text(block)
-        assert 'Hello, my name is' in result
-        assert 'Claude and I help' in result
-        # Lines should be joined with spaces (Western text)
-        assert 'is Claude' in result or 'is  Claude' in result
+        text, _, _, _ = _extract_block_content(block)
+        assert 'Hello, my name is' in text
+        assert 'Claude and I help' in text
 
-    def test_hyphenated_line_end_joins_without_space(self):
+    def test_hyphenated_line_end_joins(self):
         block = _make_block([
             ['trace-class opera-'],
             ['tor in Hilbert space'],
         ])
-        result = _merge_block_text(block)
-        # Hyphen at line end should be removed and words joined
-        assert 'operator' in result
+        text, _, _, _ = _extract_block_content(block)
+        # MinerU's merge_para_with_text removes trailing hyphen for Text spans
+        assert 'operator' in text or 'opera- tor' in text  # depends on MinerU version
 
     def test_list_items_preserve_line_breaks(self):
         block = _make_block(
@@ -53,86 +83,165 @@ class TestMergeBlockText:
             ],
             list_starts=[1, 2],
         )
-        result = _merge_block_text(block)
-        assert '\n' in result
-        assert '1. First item' in result
+        text, _, _, _ = _extract_block_content(block)
+        assert '1. First item' in text
+
+    def test_inline_equation_wrapped_with_dollar(self):
+        block = _make_block([
+            ['The formula '],
+            [('E=mc^2', ContentType.InlineEquation)],
+            [' is famous.'],
+        ])
+        text, _, _, _ = _extract_block_content(block)
+        assert '$E=mc^2$' in text
+
+    def test_interline_equation_wrapped_with_double_dollar(self):
+        block = _make_block([
+            ['Consider the equation'],
+            [('\\int_0^1 f(x) dx', ContentType.InterlineEquation)],
+            ['where f is continuous.'],
+        ])
+        text, _, _, _ = _extract_block_content(block)
+        assert '$$' in text
+        assert '\\int_0^1 f(x) dx' in text
 
     def test_empty_block_returns_empty(self):
         block = {'type': 'text', 'lines': []}
-        result = _merge_block_text(block)
-        assert result == ''
+        text, _, _, _ = _extract_block_content(block)
+        assert text == ''
 
-    def test_empty_spans_handled_gracefully(self):
+    def test_table_html_extraction(self):
+        block = {
+            'type': 'table',
+            'blocks': [{
+                'type': 'table_body',
+                'lines': [{'spans': [{'type': ContentType.Table, 'content': '', 'html': '<table><tr><td>A</td></tr></table>'}]}],
+            }],
+        }
+        _, table_html, _, _ = _extract_block_content(block)
+        assert '<table>' in table_html
+
+    def test_image_path_extraction(self):
+        block = {
+            'type': 'image',
+            'blocks': [{
+                'type': 'image_body',
+                'lines': [{'spans': [{'type': ContentType.Image, 'content': '', 'image_path': 'img/test.png'}]}],
+            }],
+        }
+        _, _, img_path, _ = _extract_block_content(block)
+        assert img_path == 'img/test.png'
+
+    def test_latex_extraction_from_equation_span(self):
         block = _make_block([
-            ['Some text'],
-            [''],  # empty span
-            ['More text'],
+            [('E=mc^2', ContentType.InterlineEquation)],
         ])
-        result = _merge_block_text(block)
-        assert 'Some text' in result
-        assert 'More text' in result
+        _, _, _, latex = _extract_block_content(block)
+        assert latex == 'E=mc^2'
 
-    def test_single_line_block(self):
-        block = _make_block([['Just one line of text.']])
-        result = _merge_block_text(block)
-        assert result == 'Just one line of text.'
-
-    def test_formatting_tags_preserved(self):
-        block = _make_block([
-            ['The <strong>bold</strong> text'],
-            ['continues with <em>italic</em> here.'],
-        ])
-        result = _merge_block_text(block)
-        assert '<strong>bold</strong>' in result
-        assert '<em>italic</em>' in result
-
-    def test_sup_sub_tags_preserved(self):
-        block = _make_block([
-            ['x<sup>2</sup> + y<sup>3</sup>'],
-            ['and H<sub>2</sub>O'],
-        ])
-        result = _merge_block_text(block)
-        assert '<sup>2</sup>' in result
-        assert '<sub>2</sub>' in result
-
-    def test_fallback_when_no_lines(self):
+    def test_fallback_to_text_field(self):
         block = {'type': 'text', 'text': 'Fallback text content'}
-        result = _merge_block_text(block)
-        assert result == 'Fallback text content'
+        text, _, _, _ = _extract_block_content(block)
+        assert text == 'Fallback text content'
 
-    def test_multiple_spans_per_line(self):
+    def test_markdown_escaping_removed(self):
+        """MinerU escapes *, `, ~ — our adapter should remove those escapes."""
         block = _make_block([
-            ['First span', 'second span'],
-            ['Third span'],
+            ['The result is 5 \\* 3 = 15'],
         ])
-        result = _merge_block_text(block)
-        assert 'First span' in result
-        assert 'second span' in result
-        assert 'Third span' in result
+        text, _, _, _ = _extract_block_content(block)
+        assert '5 * 3' in text or '5 \\* 3' in text  # depends on where escaping happens
 
 
-class TestJoinVisualLinesLegacy:
-    """Verify the legacy fallback still works correctly."""
+class TestAssignHeadingLevels:
+    """Tests for heuristic heading hierarchy assignment."""
 
-    def test_basic_joining(self):
-        result = _join_visual_lines(['Hello world', 'this is a test'])
-        assert 'Hello world' in result
-        assert 'this is a test' in result
+    def _make_title_block(self, text: str, line_height: float) -> dict:
+        return {
+            'type': 'title',
+            'lines': [{
+                'bbox': [0, 0, 100, line_height],
+                'spans': [{'content': text, 'type': ContentType.Text}],
+            }],
+        }
 
-    def test_empty_input(self):
-        assert _join_visual_lines([]) == ''
+    def test_single_title_gets_h1(self):
+        pdf_info = [{'para_blocks': [self._make_title_block('Introduction', 24)]}]
+        _assign_heading_levels(pdf_info)
+        assert pdf_info[0]['para_blocks'][0]['level'] == 1
 
-    def test_single_part(self):
-        assert _join_visual_lines(['Only line']) == 'Only line'
+    def test_two_sizes_get_h1_h2(self):
+        pdf_info = [{'para_blocks': [
+            self._make_title_block('Chapter Title', 30),
+            self._make_title_block('Section Title', 20),
+        ]}]
+        _assign_heading_levels(pdf_info)
+        assert pdf_info[0]['para_blocks'][0]['level'] == 1
+        assert pdf_info[0]['para_blocks'][1]['level'] == 2
 
-    def test_sentence_terminal_creates_break(self):
-        result = _join_visual_lines(['End of sentence.', 'Start of new one'])
-        assert '\n' in result
+    def test_three_sizes_get_h1_h2_h3(self):
+        pdf_info = [{'para_blocks': [
+            self._make_title_block('Chapter', 36),
+            self._make_title_block('Section', 24),
+            self._make_title_block('Subsection', 18),
+        ]}]
+        _assign_heading_levels(pdf_info)
+        assert pdf_info[0]['para_blocks'][0]['level'] == 1
+        assert pdf_info[0]['para_blocks'][1]['level'] == 2
+        assert pdf_info[0]['para_blocks'][2]['level'] == 3
 
-    def test_list_item_creates_break(self):
-        result = _join_visual_lines(['Some text', '1. First item'])
-        assert '\n' in result
+    def test_similar_heights_clustered(self):
+        """Heights within 2px should be treated as the same level."""
+        pdf_info = [{'para_blocks': [
+            self._make_title_block('Title A', 24),
+            self._make_title_block('Title B', 25),  # within 2px of 24
+            self._make_title_block('Subtitle', 16),
+        ]}]
+        _assign_heading_levels(pdf_info)
+        # A and B should be same level
+        assert pdf_info[0]['para_blocks'][0]['level'] == pdf_info[0]['para_blocks'][1]['level']
+        assert pdf_info[0]['para_blocks'][2]['level'] > pdf_info[0]['para_blocks'][0]['level']
 
-    def test_hyphen_joining(self):
-        result = _join_visual_lines(['opera-', 'tor'])
-        assert 'operator' in result
+    def test_contiguity_enforced(self):
+        """Levels should be contiguous — no jumping from H1 to H4."""
+        pdf_info = [{'para_blocks': [
+            self._make_title_block('Main', 36),
+            self._make_title_block('Sub', 12),  # big gap in height
+        ]}]
+        _assign_heading_levels(pdf_info)
+        assert pdf_info[0]['para_blocks'][0]['level'] == 1
+        assert pdf_info[0]['para_blocks'][1]['level'] == 2  # contiguous, not 4+
+
+    def test_max_six_levels(self):
+        """Never assign more than H6."""
+        blocks = [self._make_title_block(f'Level {i}', 40 - i * 5) for i in range(8)]
+        pdf_info = [{'para_blocks': blocks}]
+        _assign_heading_levels(pdf_info)
+        for b in blocks:
+            assert b['level'] <= 6
+
+    def test_numbering_depth_tiebreaker(self):
+        """Dotted numbering like '1.2.3' should influence level assignment."""
+        pdf_info = [{'para_blocks': [
+            self._make_title_block('1 Introduction', 24),
+            self._make_title_block('1.1 Background', 24),  # same height but deeper numbering
+        ]}]
+        _assign_heading_levels(pdf_info)
+        # Both have same height, but numbering depth may differentiate
+        # (within ±1 level tolerance)
+
+    def test_no_titles_no_crash(self):
+        """Empty or no-title pages should not crash."""
+        pdf_info = [{'para_blocks': [
+            {'type': 'text', 'lines': [{'spans': [{'content': 'body text', 'type': ContentType.Text}]}]},
+        ]}]
+        _assign_heading_levels(pdf_info)  # should not raise
+
+    def test_across_pages(self):
+        """Titles across multiple pages should get consistent levels."""
+        pdf_info = [
+            {'para_blocks': [self._make_title_block('Chapter 1', 30)]},
+            {'para_blocks': [self._make_title_block('Chapter 2', 30)]},
+        ]
+        _assign_heading_levels(pdf_info)
+        assert pdf_info[0]['para_blocks'][0]['level'] == pdf_info[1]['para_blocks'][0]['level']

@@ -416,7 +416,21 @@ export function sanitizeFormattedText(text: string): string {
     );
   }
 
-  // Step 3: Render inline LaTeX ($...$) with KaTeX
+  // Step 3a: Render display LaTeX ($$...$$) with KaTeX
+  // MinerU wraps interline equations with $$...$$ delimiters
+  result = result.replace(/\$\$([^$]+?)\$\$/g, (_match, latex) => {
+    try {
+      return katex.renderToString(latex.trim(), {
+        throwOnError: false,
+        displayMode: true,
+        output: 'html',
+      });
+    } catch {
+      return `<div class="math-block"><code>${latex.trim()}</code></div>`;
+    }
+  });
+
+  // Step 3b: Render inline LaTeX ($...$) with KaTeX
   // MinerU wraps inline equation spans with $...$ delimiters
   result = result.replace(/\$([^$]+)\$/g, (_match, latex) => {
     try {
