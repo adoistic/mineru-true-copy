@@ -25,7 +25,6 @@ export default function OcrTool() {
     new Set(["markdown"])
   );
   const [removeHeaders, setRemoveHeaders] = useState(false);
-  const [fixHeadings, setFixHeadings] = useState(false);
   const [formulaDisplay, setFormulaDisplay] = useState<'rendered' | 'image'>('rendered');
   const [tableDisplay, setTableDisplay] = useState<'rendered' | 'image'>('rendered');
   const [jobIds, setJobIds] = useState<string[]>([]);
@@ -69,7 +68,6 @@ export default function OcrTool() {
             output_formats: Array.from(selectedFormats),
             output_folder: outputFolder,
             remove_headers_footers: removeHeaders,
-            fix_headings: fixHeadings,
             formula_display: formulaDisplay,
             table_display: tableDisplay,
           })
@@ -106,7 +104,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, outputFolder, removeHeaders, fixHeadings, formulaDisplay, tableDisplay]);
+  }, [files, selectedFormats, outputFolder, removeHeaders, formulaDisplay, tableDisplay]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -327,24 +325,6 @@ export default function OcrTool() {
             </button>
           </label>
 
-          <label className="flex items-center justify-between">
-            <span className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-              Fix Heading Hierarchy
-              <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
-                Coming Soon
-              </span>
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={fixHeadings}
-              onClick={() => setFixHeadings(!fixHeadings)}
-              disabled
-              className="relative inline-flex h-6 w-11 shrink-0 cursor-not-allowed rounded-full border-2 border-transparent bg-slate-200 opacity-50 dark:bg-slate-700"
-            >
-              <span className="pointer-events-none inline-block h-5 w-5 translate-x-0 rounded-full bg-white shadow ring-0" />
-            </button>
-          </label>
         </div>
 
         {/* Display mode selects */}

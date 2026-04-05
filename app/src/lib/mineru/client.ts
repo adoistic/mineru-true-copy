@@ -206,6 +206,7 @@ function parseRegions(page: Record<string, unknown>): MineruOutput['pages'][0]['
       bbox,
       content: extractContent(block),
       page_number: (page.page_idx as number || 0) + 1,
+      level: block.level as number | undefined,
       html: block.html as string | undefined,
       table_html: block.table_html as string | undefined,
       latex: block.latex as string | undefined,
