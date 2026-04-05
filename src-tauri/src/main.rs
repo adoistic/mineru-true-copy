@@ -88,8 +88,9 @@ fn main() {
                     "models-dir": models_path.to_string_lossy(),
                     "device-mode": "mps",
                     "table-config": {
-                        "is_table_recog_enable": false,
-                        "is_rapid_table": false
+                        "model": "rapid_table",
+                        "enable": true,
+                        "max_time": 400
                     },
                     "layout-config": {
                         "model": "doclayout_yolo"
