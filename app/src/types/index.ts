@@ -73,7 +73,7 @@ export interface MineruRegion {
   img_data?: string; // Base64-encoded image data
   img_mime?: string; // MIME type (image/jpeg, image/png)
   level?: number; // Heading level 1-6 for title regions (set by heading correction)
-  inline_equations?: Array<{latex: string; display: string; img_data?: string; img_mime?: string}>;
+  inline_equations?: Array<{latex: string; display: string; img_data?: string; img_mime?: string; bbox?: [number, number, number, number]; line_bbox?: [number, number, number, number]}>;
   children?: MineruRegion[];
 }
 

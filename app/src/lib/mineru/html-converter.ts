@@ -417,6 +417,8 @@ interface InlineEquation {
   display: string;
   img_data?: string;
   img_mime?: string;
+  bbox?: [number, number, number, number]; // Equation bbox from MinerU span [x1,y1,x2,y2]
+  line_bbox?: [number, number, number, number]; // Containing line bbox for height context
 }
 
 export interface FormulaRenderOptions {

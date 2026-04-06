@@ -742,6 +742,13 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
                 display = 'block' if span_type == CT.InterlineEquation else 'inline'
                 eq_idx = len(inline_equations)
                 eq_entry = {'latex': content, 'display': display}
+                # Pass equation bbox for proper sizing on the client
+                span_bbox = span.get('bbox')
+                if span_bbox:
+                    eq_entry['bbox'] = span_bbox
+                line_bbox = line.get('bbox')
+                if line_bbox:
+                    eq_entry['line_bbox'] = line_bbox
                 # Attach image data if available
                 eq_img_path = span.get('image_path', '')
                 if eq_img_path and img_dir:
@@ -781,6 +788,15 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
                 result = result[:-1] + lt_stripped
             else:
                 result += ' ' + lt_stripped
+
+    # Post-process: split bibliography/endnote entries that OCR merged into
+    # one line. Pattern: multiple [N] markers in a single line of text.
+    import re
+    bracket_refs = re.findall(r'\[\d+\]', result)
+    if len(bracket_refs) >= 3 and '\n' not in result:
+        # Split at [N] boundaries, keeping the marker with its text
+        parts = re.split(r'(?=\[\d+\]\s)', result)
+        result = '\n'.join(p.strip() for p in parts if p.strip())
 
     return result, inline_equations
 

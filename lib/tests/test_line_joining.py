@@ -14,24 +14,33 @@ from magic_pdf.config.ocr_content_type import ContentType
 
 
 def _make_block(lines_content: list[list[tuple[str, str]]], block_type='text',
-                list_starts: list[int] | None = None) -> dict:
+                list_starts: list[int] | None = None,
+                span_bboxes: dict | None = None,
+                line_bboxes: list | None = None) -> dict:
     """Build a para_block dict from a list of lines.
 
     Each line is a list of (text, span_type) tuples.
     Shorthand: plain string is treated as (text, 'Text').
+    span_bboxes: dict mapping (line_idx, span_idx) to [x1,y1,x2,y2]
+    line_bboxes: list of [x1,y1,x2,y2] per line
     """
     lines = []
     for i, spans_data in enumerate(lines_content):
         spans = []
-        for item in spans_data:
+        for j, item in enumerate(spans_data):
             if isinstance(item, str):
-                spans.append({'content': item, 'type': ContentType.Text})
+                span = {'content': item, 'type': ContentType.Text}
             else:
                 text, stype = item
-                spans.append({'content': text, 'type': stype})
+                span = {'content': text, 'type': stype}
+            if span_bboxes and (i, j) in span_bboxes:
+                span['bbox'] = span_bboxes[(i, j)]
+            spans.append(span)
         line = {'spans': spans}
         if list_starts and i in list_starts:
             line['is_list_start_line'] = True
+        if line_bboxes and i < len(line_bboxes):
+            line['bbox'] = line_bboxes[i]
         lines.append(line)
     return {'type': block_type, 'lines': lines}
 
@@ -117,6 +126,28 @@ class TestExtractBlockContent:
         assert len(inline_eqs) == 1
         assert inline_eqs[0]['latex'] == '\\int_0^1 f(x) dx'
         assert inline_eqs[0]['display'] == 'block'
+
+    def test_inline_equation_passes_bbox(self):
+        """Equation span bbox and line bbox are passed through to eq_entry."""
+        block = _make_block(
+            [['Lemma: ', ('x^2', ContentType.InlineEquation)]],
+            span_bboxes={(0, 1): [150, 200, 180, 220]},
+            line_bboxes=[[50, 195, 500, 225]],
+        )
+        _, _, _, _, inline_eqs = _extract_block_content(block)
+        assert len(inline_eqs) == 1
+        assert inline_eqs[0]['bbox'] == [150, 200, 180, 220]
+        assert inline_eqs[0]['line_bbox'] == [50, 195, 500, 225]
+
+    def test_inline_equation_missing_bbox_graceful(self):
+        """Equation without bbox on span still works (no bbox key in eq_entry)."""
+        block = _make_block([
+            ['Formula: ', ('y=mx+b', ContentType.InlineEquation)],
+        ])
+        _, _, _, _, inline_eqs = _extract_block_content(block)
+        assert len(inline_eqs) == 1
+        assert 'bbox' not in inline_eqs[0]
+        assert 'line_bbox' not in inline_eqs[0]
 
     def test_empty_block_returns_empty(self):
         block = {'type': 'text', 'lines': []}
