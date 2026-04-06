@@ -225,7 +225,7 @@ describe('convertList', () => {
 describe('regionToHtml', () => {
   it('22. text block with no HTML tags renders same as before (wrapped in <p>)', () => {
     const region = makeRegion({ type: 'text', content: 'Hello world' });
-    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered' });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
     expect(result).toBe('<p>Hello world</p>');
   });
 
@@ -235,7 +235,7 @@ describe('regionToHtml', () => {
       content: 'E equals mc squared',
       latex: 'E = mc^2',
     });
-    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered' });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
     expect(result).toContain('math-block');
     // KaTeX output should NOT contain raw LaTeX
     expect(result).not.toContain('E = mc^2');
@@ -250,18 +250,18 @@ describe('regionToHtml', () => {
       latex: '\\frac{',
     });
     // Should not throw
-    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered' });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
     expect(result).toContain('math-block');
   });
 
-  it('30s. formula without latex field falls back to escaped content', () => {
+  it('30s. formula without latex field uses content as KaTeX source', () => {
     const region = makeRegion({
       type: 'formula',
       content: 'x^2 + y^2 = z^2',
     });
-    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered' });
-    expect(result).toContain('formula');
-    expect(result).toContain('x^2 + y^2 = z^2');
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
+    expect(result).toContain('math-block');
+    expect(result).toContain('katex');
   });
 
   it('23. figure block with base64 image data renders img tag', () => {
@@ -271,7 +271,7 @@ describe('regionToHtml', () => {
       img_data: 'iVBORw0KGgo=',
       img_mime: 'image/png',
     });
-    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered' });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
     expect(result).toContain('<img src="data:image/png;base64,iVBORw0KGgo="');
     expect(result).toContain('<figure>');
     expect(result).toContain('<figcaption>');

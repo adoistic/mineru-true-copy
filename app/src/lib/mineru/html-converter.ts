@@ -17,12 +17,16 @@ export interface HtmlConversionOptions {
   pageRange?: { start: number; end: number };
   formulaDisplay?: 'rendered' | 'image';
   tableDisplay?: 'rendered' | 'image';
+  includeFigures?: boolean;
+  figureDisplay?: 'image' | 'text';
 }
 
 interface RegionRenderOptions {
   joinWithPrevious: boolean;
   formulaDisplay: 'rendered' | 'image';
   tableDisplay: 'rendered' | 'image';
+  includeFigures: boolean;
+  figureDisplay: 'image' | 'text';
 }
 
 export function mineruToHtml(output: MineruOutput, options: HtmlConversionOptions): string {
@@ -34,6 +38,7 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
   htmlParts.push('<head>');
   htmlParts.push('<meta charset="UTF-8">');
   htmlParts.push(`<title>${escapeHtml(output.metadata.file_name || 'Document')}</title>`);
+  htmlParts.push('<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.44/dist/katex.min.css">');
   htmlParts.push('<style>');
   htmlParts.push(getDefaultStyles());
   htmlParts.push('</style>');
@@ -41,8 +46,10 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
   htmlParts.push('<body>');
 
   let previousPageEndedMidSentence = false;
-  const formulaDisplay = options.formulaDisplay ?? 'rendered';
+  const formulaDisplay = options.formulaDisplay ?? 'image';
   const tableDisplay = options.tableDisplay ?? 'rendered';
+  const includeFigures = options.includeFigures ?? true;
+  const figureDisplay = options.figureDisplay ?? 'image';
 
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
@@ -52,7 +59,7 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
     const sorted = sortByReadingOrder(regions);
 
     for (const region of sorted) {
-      const html = regionToHtml(region, { joinWithPrevious: previousPageEndedMidSentence, formulaDisplay, tableDisplay });
+      const html = regionToHtml(region, { joinWithPrevious: previousPageEndedMidSentence, formulaDisplay, tableDisplay, includeFigures, figureDisplay });
       if (html) {
         htmlParts.push(html);
         previousPageEndedMidSentence = false;
@@ -75,18 +82,20 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
   return htmlParts.join('\n');
 }
 
-export function mineruToHtmlBody(output: MineruOutput, options: HtmlConversionOptions): string {
+function mineruToHtmlBody(output: MineruOutput, options: HtmlConversionOptions): string {
   const pages = filterPages(output.pages, options.pageRange);
   const htmlParts: string[] = [];
-  const formulaDisplay = options.formulaDisplay ?? 'rendered';
+  const formulaDisplay = options.formulaDisplay ?? 'image';
   const tableDisplay = options.tableDisplay ?? 'rendered';
+  const includeFigures = options.includeFigures ?? true;
+  const figureDisplay = options.figureDisplay ?? 'image';
 
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
     const sorted = sortByReadingOrder(regions);
 
     for (const region of sorted) {
-      const html = regionToHtml(region, { joinWithPrevious: false, formulaDisplay, tableDisplay });
+      const html = regionToHtml(region, { joinWithPrevious: false, formulaDisplay, tableDisplay, includeFigures, figureDisplay });
       if (html) htmlParts.push(html);
     }
   }
@@ -120,17 +129,22 @@ function sortByReadingOrder(regions: MineruRegion[]): MineruRegion[] {
 }
 
 export function regionToHtml(region: MineruRegion, options: RegionRenderOptions): string {
+  const formulaOpts: FormulaRenderOptions = {
+    formulaDisplay: options.formulaDisplay,
+    inlineEquations: region.inline_equations,
+  };
+
   switch (region.type) {
     case 'title': {
       const level = region.level && region.level >= 1 && region.level <= 6 ? region.level : 1;
-      return `<h${level}>${sanitizeFormattedText(region.content)}</h${level}>`;
+      return `<h${level}>${sanitizeFormattedText(region.content, formulaOpts)}</h${level}>`;
     }
 
     case 'text':
       if (options.joinWithPrevious) {
-        return sanitizeFormattedText(region.content);
+        return sanitizeFormattedText(region.content, formulaOpts);
       }
-      return `<p>${sanitizeFormattedText(region.content)}</p>`;
+      return `<p>${sanitizeFormattedText(region.content, formulaOpts)}</p>`;
 
     case 'table': {
       if (options.tableDisplay === 'image' && region.img_data && region.img_mime) {
@@ -141,21 +155,25 @@ export function regionToHtml(region: MineruRegion, options: RegionRenderOptions)
     }
 
     case 'formula': {
-      if (options.formulaDisplay === 'image' && region.img_data && region.img_mime) {
+      const hasImage = region.img_data && region.img_mime;
+      if (options.formulaDisplay === 'image' && hasImage) {
         return `<div class="math-block"><img src="data:${region.img_mime};base64,${region.img_data}" alt="Formula" style="max-width:100%"></div>`;
       }
       // Use region.latex if available, otherwise fall back to region.content
-      // (MinerU stores equation LaTeX in span.content, not span.latex)
       const latexSource = region.latex || region.content;
       if (latexSource) {
         try {
           const html = katex.renderToString(latexSource, {
-            throwOnError: false,
+            throwOnError: true,
             displayMode: true,
             output: 'html',
           });
           return `<div class="math-block">${html}</div>`;
         } catch {
+          // KaTeX failed — fall back to image if available, never plain text
+          if (hasImage) {
+            return `<div class="math-block"><img src="data:${region.img_mime};base64,${region.img_data}" alt="Formula" style="max-width:100%"></div>`;
+          }
           return `<div class="math-block"><code>${escapeHtml(latexSource)}</code></div>`;
         }
       }
@@ -163,18 +181,23 @@ export function regionToHtml(region: MineruRegion, options: RegionRenderOptions)
     }
 
     case 'figure': {
+      if (!options.includeFigures) return '';
+      if (options.figureDisplay === 'text') {
+        const caption = region.content ? sanitizeFormattedText(region.content, formulaOpts) : '[Image]';
+        return `<p>${caption}</p>`;
+      }
       const imgTag = region.img_data && region.img_mime
         ? `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`
         : '';
-      const caption = region.content ? `<figcaption>${sanitizeFormattedText(region.content)}</figcaption>` : '';
+      const caption = region.content ? `<figcaption>${sanitizeFormattedText(region.content, formulaOpts)}</figcaption>` : '';
       return `<figure>${imgTag}${caption}</figure>`;
     }
 
     case 'list':
-      return convertList(region.content);
+      return convertList(region.content, formulaOpts);
 
     case 'caption':
-      return `<figcaption>${sanitizeFormattedText(region.content)}</figcaption>`;
+      return `<figcaption>${sanitizeFormattedText(region.content, formulaOpts)}</figcaption>`;
 
     case 'header':
     case 'footer':
@@ -296,8 +319,8 @@ export function sanitizeTableHtml(html: string): string {
 function classifyListLine(line: string): { level: number; text: string } {
   const trimmed = line.trim();
 
-  // Arabic numbered: 1. / 1) / (1) / [1]
-  if (/^\d+[.)]\s/.test(trimmed) || /^\(\d+\)\s/.test(trimmed) || /^\[\d+\]\s/.test(trimmed)) {
+  // Arabic numbered: 1. / 1) / (1) / [1] / 1.1. / 3.2.1. (multi-level)
+  if (/^(\d+\.)+\s/.test(trimmed) || /^\d+\)\s/.test(trimmed) || /^\(\d+\)\s/.test(trimmed) || /^\[\d+\]\s/.test(trimmed)) {
     return { level: 0, text: trimmed };
   }
 
@@ -343,8 +366,8 @@ function classifyListLine(line: string): { level: number; text: string } {
     return { level: 0, text: trimmed };
   }
 
-  // Section/Article/Step prefixes
-  if (/^(?:Section|Article|Part|Chapter|Item|Note|Step)\s+\d/i.test(trimmed)) {
+  // Section/Article/Step/Appendix/References prefixes
+  if (/^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References)\b/i.test(trimmed)) {
     return { level: 0, text: trimmed };
   }
 
@@ -360,7 +383,7 @@ function isValidRoman(s: string): boolean {
   return /^(?:x{0,3})(?:ix|iv|v?i{0,3})$/.test(s) && s.length > 0;
 }
 
-export function convertList(content: string): string {
+export function convertList(content: string, formulaOpts?: FormulaRenderOptions): string {
   const lines = content.split('\n').filter(l => l.trim());
   if (lines.length === 0) return '';
 
@@ -379,7 +402,7 @@ export function convertList(content: string): string {
     const indent = Math.max(0, effectiveLevel - minLevel);
     const marginLeft = indent * 1.5; // 1.5em per nesting level
     const style = marginLeft > 0 ? ` style="margin-left:${marginLeft}em"` : '';
-    html += `<p${style}>${sanitizeFormattedText(text)}</p>\n`;
+    html += `<p${style}>${sanitizeFormattedText(text, formulaOpts)}</p>\n`;
     if (level >= 0) prevLevel = level;
   }
   html += '</div>';
@@ -398,53 +421,130 @@ export function escapeHtml(text: string): string {
 
 const ALLOWED_TAGS = ['strong', 'em', 'u', 's', 'b', 'i', 'sup', 'sub'] as const;
 
-export function sanitizeFormattedText(text: string): string {
-  // Step 1: Escape ALL HTML
-  let result = escapeHtml(text);
+interface InlineEquation {
+  latex: string;
+  display: string;
+  img_data?: string;
+  img_mime?: string;
+}
 
-  // Step 2: Unescape ONLY the allowed tags (opening and closing, stripping any attributes)
+export interface FormulaRenderOptions {
+  formulaDisplay?: 'rendered' | 'image';
+  inlineEquations?: InlineEquation[];
+}
+
+export function sanitizeFormattedText(text: string, options?: FormulaRenderOptions): string {
+  const formulaDisplay = options?.formulaDisplay ?? 'image';
+  const inlineEquations = options?.inlineEquations;
+
+  // Use placeholders to protect rendered HTML from the escape step.
+  const placeholders: string[] = [];
+  function placeholder(html: string): string {
+    const idx = placeholders.length;
+    placeholders.push(html);
+    return `\x00KATEX${idx}\x00`;
+  }
+
+  let result = text;
+
+  // Step 1: Handle {{EQ:index}} placeholders from server (inline equations with image data)
+  if (inlineEquations && inlineEquations.length > 0) {
+    result = result.replace(/\{\{EQ:(\d+)\}\}/g, (_match, idxStr) => {
+      const idx = parseInt(idxStr, 10);
+      const eq = inlineEquations[idx];
+      if (!eq) return _match;
+      return placeholder(renderEquation(eq, formulaDisplay));
+    });
+  }
+
+  // Step 2: Handle legacy $...$ LaTeX in text (for content without inline_equations data)
+  // Display LaTeX ($$...$$)
+  result = result.replace(/\$\$([^$]+?)\$\$/g, (_match, latex) => {
+    return placeholder(renderLatex(latex.trim(), true, formulaDisplay));
+  });
+  // Inline LaTeX ($...$)
+  result = result.replace(/\$([^$]+)\$/g, (_match, latex) => {
+    return placeholder(renderLatex(latex, false, formulaDisplay));
+  });
+
+  // Step 3: Escape ALL remaining HTML (rendered content is safely in placeholders)
+  result = escapeHtml(result);
+
+  // Step 4: Unescape ONLY the allowed tags (opening and closing, stripping any attributes)
   for (const tag of ALLOWED_TAGS) {
-    // Opening tags with or without attributes: &lt;strong class=&quot;x&quot;&gt; → <strong>
     result = result.replace(
       new RegExp(`&lt;${tag}(\\s.*?)?&gt;`, 'gi'),
       `<${tag}>`
     );
-    // Closing tags: &lt;/strong&gt; → </strong>
     result = result.replace(
       new RegExp(`&lt;/${tag}&gt;`, 'gi'),
       `</${tag}>`
     );
   }
 
-  // Step 3a: Render display LaTeX ($$...$$) with KaTeX
-  // MinerU wraps interline equations with $$...$$ delimiters
-  result = result.replace(/\$\$([^$]+?)\$\$/g, (_match, latex) => {
-    try {
-      return katex.renderToString(latex.trim(), {
-        throwOnError: false,
-        displayMode: true,
-        output: 'html',
-      });
-    } catch {
-      return `<div class="math-block"><code>${latex.trim()}</code></div>`;
-    }
-  });
-
-  // Step 3b: Render inline LaTeX ($...$) with KaTeX
-  // MinerU wraps inline equation spans with $...$ delimiters
-  result = result.replace(/\$([^$]+)\$/g, (_match, latex) => {
-    try {
-      return katex.renderToString(latex, {
-        throwOnError: false,
-        displayMode: false,
-        output: 'html',
-      });
-    } catch {
-      return `<code class="math-inline">${latex}</code>`;
-    }
+  // Step 5: Restore placeholders
+  result = result.replace(/\x00KATEX(\d+)\x00/g, (_match, idx) => {
+    return placeholders[parseInt(idx, 10)];
   });
 
   return result;
+}
+
+/**
+ * Render an inline equation that has image data from the server.
+ * Priority: image when formulaDisplay='image', KaTeX when 'rendered' (with image fallback).
+ * NEVER returns plain text.
+ */
+function renderEquation(eq: InlineEquation, formulaDisplay: 'rendered' | 'image'): string {
+  const isBlock = eq.display === 'block';
+  const hasImage = eq.img_data && eq.img_mime;
+
+  if (formulaDisplay === 'image' && hasImage) {
+    const imgTag = `<img src="data:${eq.img_mime};base64,${eq.img_data}" alt="Formula" style="max-height:1.2em;vertical-align:middle">`;
+    return isBlock ? `<div class="math-block">${imgTag}</div>` : imgTag;
+  }
+
+  // Try KaTeX rendering
+  try {
+    const html = katex.renderToString(eq.latex, {
+      throwOnError: true,
+      displayMode: isBlock,
+      output: 'html',
+    });
+    return isBlock ? `<div class="math-block">${html}</div>` : html;
+  } catch {
+    // KaTeX failed — fall back to image if available, NEVER plain text
+    if (hasImage) {
+      const imgTag = `<img src="data:${eq.img_mime};base64,${eq.img_data}" alt="Formula" style="max-height:1.2em;vertical-align:middle">`;
+      return isBlock ? `<div class="math-block">${imgTag}</div>` : imgTag;
+    }
+    // Last resort: render as code block (not plain text)
+    const codeHtml = isBlock
+      ? `<div class="math-block"><code>${escapeHtml(eq.latex)}</code></div>`
+      : `<code class="math-inline">${escapeHtml(eq.latex)}</code>`;
+    return codeHtml;
+  }
+}
+
+/**
+ * Render LaTeX from legacy $...$ markup (no image data available).
+ * Used for backward compatibility with content that doesn't have inline_equations.
+ */
+function renderLatex(latex: string, isBlock: boolean, formulaDisplay: 'rendered' | 'image'): string {
+  // Without image data, always try KaTeX regardless of formulaDisplay
+  try {
+    const html = katex.renderToString(latex, {
+      throwOnError: false,
+      displayMode: isBlock,
+      output: 'html',
+    });
+    return isBlock ? `<div class="math-block">${html}</div>` : html;
+  } catch {
+    const codeHtml = isBlock
+      ? `<div class="math-block"><code>${escapeHtml(latex)}</code></div>`
+      : `<code class="math-inline">${escapeHtml(latex)}</code>`;
+    return codeHtml;
+  }
 }
 
 function getDefaultStyles(): string {

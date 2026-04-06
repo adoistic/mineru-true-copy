@@ -3,10 +3,20 @@
   "configurations": [
     {
       "name": "app",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/opt/homebrew/bin/node",
+      "runtimeArgs": ["node_modules/.bin/next", "dev"],
       "port": 3000,
-      "cwd": "app"
+      "cwd": "app",
+      "autoPort": false,
+      "env": {
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+      }
+    },
+    {
+      "name": "tc-test",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8899", "--directory", "/tmp"],
+      "port": 8899
     }
   ]
 }

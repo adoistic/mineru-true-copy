@@ -71,7 +71,14 @@ export function stopHealthMonitoring(): void {
   }
 }
 
-export async function submitFile(filePath: string): Promise<string> {
+export interface SubmitOptions {
+  formulaDisplay?: 'rendered' | 'image';
+  tableDisplay?: 'rendered' | 'image';
+  includeFigures?: boolean;
+  figureDisplay?: 'image' | 'text';
+}
+
+export async function submitFile(filePath: string, options?: SubmitOptions): Promise<string> {
   if (mineruStatus !== 'running') {
     // Try to check health first
     const healthy = await checkHealth();
@@ -87,6 +94,10 @@ export async function submitFile(filePath: string): Promise<string> {
   formData.append('file', new Blob([fileBuffer]), fileName);
   formData.append('parse_method', 'auto');
   formData.append('is_json_md_dump', 'true');
+  if (options?.formulaDisplay) formData.append('formula_display', options.formulaDisplay);
+  if (options?.tableDisplay) formData.append('table_display', options.tableDisplay);
+  if (options?.includeFigures !== undefined) formData.append('include_figures', String(options.includeFigures));
+  if (options?.figureDisplay) formData.append('figure_display', options.figureDisplay);
 
   const response = await fetch(`${getMineruUrl()}/file_parse`, {
     method: 'POST',
@@ -157,6 +168,22 @@ export async function pollForCompletion(
   throw new Error('MinerU processing timed out');
 }
 
+/**
+ * Fetch native exports from MinerU server.
+ * These call pipe_result.get_markdown() / get_content_list() on the Python side.
+ */
+
+export async function getPageImage(taskId: string, pageIdx: number): Promise<Buffer> {
+  const response = await fetch(`${getMineruUrl()}/tasks/${taskId}/page_image/${pageIdx}`, {
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!response.ok) {
+    throw new Error(`Page image fetch failed: ${response.status}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
 function parseMineruResult(raw: unknown): MineruOutput {
   // MinerU returns a structured JSON with pages and their content blocks
   // This normalizes it into our internal format
@@ -212,6 +239,7 @@ function parseRegions(page: Record<string, unknown>): MineruOutput['pages'][0]['
       latex: block.latex as string | undefined,
       img_data: block.img_data as string | undefined,
       img_mime: block.img_mime as string | undefined,
+      inline_equations: block.inline_equations as Array<{latex: string; display: string; img_data?: string; img_mime?: string}> | undefined,
     };
   });
 }

@@ -1,11 +1,10 @@
 /**
- * OCR Pipeline: PDF → MinerU → structured JSON → HTML
+ * OCR Pipeline: PDF → MinerU → structured JSON → exports
  * Handles MinerU interaction, progress tracking, and output generation.
  */
-import { Job, PipelineProgress, MineruOutput, ProcessingOptions } from '@/types';
+import { Job, PipelineProgress, ProcessingOptions } from '@/types';
 import { Pipeline, PipelineResult } from './types';
 import { submitFile, pollForCompletion } from '@/lib/mineru/client';
-import { mineruToHtml, mineruToHtmlBody } from '@/lib/mineru/html-converter';
 import { exportAll } from '@/lib/export';
 import fs from 'fs';
 import path from 'path';
@@ -28,7 +27,12 @@ export class OcrPipeline implements Pipeline {
       message: 'Submitting to OCR engine...',
     });
 
-    const taskId = await submitFile(job.file_path);
+    const taskId = await submitFile(job.file_path, {
+      formulaDisplay: config.formula_display,
+      tableDisplay: config.table_display,
+      includeFigures: config.include_figures,
+      figureDisplay: config.figure_display,
+    });
 
     // Step 2: Poll for completion
     onProgress({
@@ -53,7 +57,7 @@ export class OcrPipeline implements Pipeline {
     const actualPages = mineruOutput.pages.length;
     mineruOutput.metadata.file_name = job.file_name;
 
-    // Step 3: Convert to HTML
+    // Step 3: Export to selected formats
     onProgress({
       job_id: job.id,
       current_page: actualPages,
@@ -62,29 +66,25 @@ export class OcrPipeline implements Pipeline {
       message: 'Generating output files...',
     });
 
-    const htmlOptions = {
-      removeHeadersFooters: config.remove_headers_footers ?? false,
-      removeMetadata: config.remove_metadata ?? false,
-      joinBrokenPages: config.join_broken_pages ?? false,
-      pageRange: config.page_range,
-      formulaDisplay: config.formula_display ?? 'rendered' as const,
-      tableDisplay: config.table_display ?? 'rendered' as const,
-    };
-
-    // Step 4: Export to selected formats
     const baseName = `${path.parse(job.file_name).name}_${job.id.slice(0, 8)}`;
 
     const outputFiles = await exportAll({
       mineruOutput,
-      htmlOptions,
+      taskId,
       formats: config.output_formats,
       outputFolder: config.output_folder,
       baseName,
       originalPdfPath: job.file_path,
+      removeHeadersFooters: config.remove_headers_footers,
+      formulaDisplay: config.formula_display,
+      tableDisplay: config.table_display,
+      includeFigures: config.include_figures,
+      figureDisplay: config.figure_display,
+      includeBenchmarkImages: config.include_benchmark_images,
     });
 
-    // Save raw MinerU JSON for reference
-    const jsonPath = path.join(config.output_folder, `${baseName}_mineru.json`);
+    // Save raw OCR data JSON for reference
+    const jsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
     fs.writeFileSync(jsonPath, JSON.stringify(mineruOutput, null, 2));
 
     return {

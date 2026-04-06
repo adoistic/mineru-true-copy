@@ -43,29 +43,33 @@ export async function POST(request: Request) {
     }
 
     const baseName = path.parse(job.file_name).name;
-    const mineruJsonPath = path.join(job.output_folder, `${baseName}_mineru.json`);
+    const ocrDataPath = path.join(job.output_folder, `${baseName}_ocr_data.json`);
 
-    if (!fs.existsSync(mineruJsonPath)) {
+    if (!fs.existsSync(ocrDataPath)) {
       return Response.json(
-        { error: 'MinerU output not found for this job' },
+        { error: 'OCR data not found for this job' },
         { status: 404 }
       );
     }
 
-    const mineruOutput = JSON.parse(fs.readFileSync(mineruJsonPath, 'utf-8'));
+    const mineruOutput = JSON.parse(fs.readFileSync(ocrDataPath, 'utf-8'));
     const config = job.tool_config as Record<string, unknown>;
 
     const outputFiles = await exportAll({
       mineruOutput,
-      htmlOptions: {
-        removeHeadersFooters: (config.remove_headers_footers as boolean) ?? false,
-        removeMetadata: (config.remove_metadata as boolean) ?? false,
-        joinBrokenPages: (config.join_broken_pages as boolean) ?? false,
-      },
       formats,
       outputFolder: output_folder,
       baseName,
       originalPdfPath: job.file_path,
+      htmlOptions: {
+        removeHeadersFooters: (config.remove_headers_footers as boolean) ?? false,
+        removeMetadata: (config.remove_metadata as boolean) ?? false,
+        joinBrokenPages: (config.join_broken_pages as boolean) ?? false,
+        formulaDisplay: (config.formula_display as string) === 'image' ? 'image' : 'rendered',
+        tableDisplay: (config.table_display as string) === 'image' ? 'image' : 'rendered',
+        includeFigures: (config.include_figures as boolean) ?? true,
+        figureDisplay: ((config.figure_display as string) === 'text' ? 'text' : 'image') as 'image' | 'text',
+      },
     });
 
     return Response.json({ success: true, output_files: outputFiles });

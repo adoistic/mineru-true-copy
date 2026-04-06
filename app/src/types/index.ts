@@ -4,7 +4,7 @@ export type JobType = 'ocr' | 'extract' | 'heading_correction' | 'wizard' | 'tra
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'retrying' | 'permanently_failed';
 export type PipelineErrorType = 'mineru_crash' | 'llm_api_error' | 'rate_limited' | 'insufficient_credits' | 'key_expired' | 'partial_failure' | 'network_error';
 export type KeyStatus = 'active' | 'revoked' | 'expired';
-export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'zip';
+export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'true_copy_html' | 'zip';
 
 export interface Job {
   id: string;
@@ -73,6 +73,7 @@ export interface MineruRegion {
   img_data?: string; // Base64-encoded image data
   img_mime?: string; // MIME type (image/jpeg, image/png)
   level?: number; // Heading level 1-6 for title regions (set by heading correction)
+  inline_equations?: Array<{latex: string; display: string; img_data?: string; img_mime?: string}>;
   children?: MineruRegion[];
 }
 
@@ -132,8 +133,11 @@ export interface ProcessingOptions {
   output_formats: ExportFormat[];
   output_folder: string;
   fix_headings?: boolean;
-  formula_display?: 'rendered' | 'image';  // default 'rendered'
+  formula_display?: 'rendered' | 'image';  // default 'image'
   table_display?: 'rendered' | 'image';    // default 'rendered'
+  include_figures?: boolean;               // default true
+  figure_display?: 'image' | 'text';       // default 'image'
+  include_benchmark_images?: boolean;      // true-copy HTML: also produce version with page images
 }
 
 export interface ExtractionOptions {

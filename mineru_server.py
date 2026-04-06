@@ -55,8 +55,25 @@ from magic_pdf.libs.pdf_image_tools import cut_image
 from magic_pdf.libs.commons import join_path
 from magic_pdf.config.ocr_content_type import ContentType
 
-# Task store (in-memory)
+# Task store (in-memory) with LRU eviction
+MAX_TASKS = 3
 tasks: dict[str, dict] = {}
+
+
+def _evict_old_tasks():
+    """Evict oldest tasks when over MAX_TASKS limit."""
+    while len(tasks) > MAX_TASKS:
+        oldest_id = next(iter(tasks))
+        old_task = tasks.pop(oldest_id)
+        # Clean up temp directory if it exists
+        img_dir = old_task.get('_img_dir')
+        if img_dir:
+            import shutil
+            try:
+                shutil.rmtree(img_dir, ignore_errors=True)
+            except Exception:
+                pass
+        print(f'[MinerU Server] Evicted task {oldest_id} ({len(tasks)} remaining)')
 
 # Dynamic concurrency based on system memory
 # ~3GB base for models, ~2GB per concurrent OCR job, reserve 4GB for OS
@@ -144,22 +161,35 @@ def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     print(f'[MinerU Server] Equation image cropping: {cropped} cropped')
 
 
-def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
+def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | None = None):
     """Run full MinerU OCR pipeline and store the structured result."""
     try:
         tasks[task_id]['status'] = 'processing'
         t_start = time.time()
+        config = config or {}
 
         ds = PymuDocDataset(pdf_bytes, lang='en')
 
         # Step 1: Model inference (layout detection + OCR)
+        # Skip UniMerNet when user only wants formula images (no LaTeX recognition needed)
+        # Skip table structure recognition when user only wants table images
+        formula_enable = config.get('formula_display') != 'image'
+        table_enable = config.get('table_display') != 'image'
         t1 = time.time()
         infer_result = ds.apply(
             doc_analyze,
             ocr=True,
             lang='en',
-            formula_enable=True,  # UniMerNet patched for transformers 4.38+ compatibility
+            formula_enable=formula_enable,
+            table_enable=table_enable,
         )
+        skipped = []
+        if not formula_enable:
+            skipped.append('UniMerNet (formula)')
+        if not table_enable:
+            skipped.append('table structure recognition')
+        if skipped:
+            print(f'[MinerU Server] Skipped: {", ".join(skipped)}')
         t2 = time.time()
         print(f'[MinerU Server] Step 1 (model inference): {t2-t1:.1f}s')
 
@@ -226,7 +256,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
 
                 # Extract content from the nested structure:
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
-                text, table_html, img_path, latex = _extract_block_content(b, img_dir)
+                text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir)
 
                 # Detect list content in text blocks
                 if block_type == 'text' and text and _detect_list_content(text):
@@ -237,6 +267,9 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
                     'bbox': bbox,
                     'text': text,
                 }
+
+                if inline_equations:
+                    block['inline_equations'] = inline_equations
 
                 # Include heading level for title blocks
                 if block_type == 'title' and 'level' in b:
@@ -261,11 +294,23 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
 
                 blocks.append(block)
 
+            # Post-OCR pass: merge overflowed blocks with adjacent empty blocks.
+            # Pattern: VisionLLM OCR stuffs text from multiple small adjacent blocks
+            # into one, leaving neighbors empty. Expand the bbox to cover the empties.
+            blocks = _merge_overflowed_blocks(blocks)
+
             pages.append({
                 'page_idx': page_idx,
                 'page_size': {'width': width, 'height': height},
                 'preproc_blocks': blocks,
             })
+
+        # Recover discarded blocks that have real content (e.g. styled section
+        # headers like "EXERCISE") while filtering out repeating page headers,
+        # footers, and page numbers.  Strategy: extract text from every
+        # discarded block across all pages, count how many pages each
+        # normalised text appears on, and only keep text that is unique.
+        _recover_discarded_blocks(pdf_info_raw, pages, img_dir, pdf_bytes, config)
 
         result = {
             'pdf_info': pages,
@@ -277,6 +322,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
         # Store pipe_result for native export methods (content_list, markdown)
         tasks[task_id]['_pipe_result'] = pipe_result
         tasks[task_id]['_img_dir'] = img_dir
+        # Store PDF bytes for page image rasterization (true-copy export)
+        tasks[task_id]['_pdf_bytes'] = pdf_bytes
 
         total_blocks = sum(len(p['preproc_blocks']) for p in pages)
         print(f'[MinerU Server] Task {task_id} completed: '
@@ -291,6 +338,169 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str):
         _parse_semaphore.release()
 
 
+def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
+                               pdf_bytes: bytes | None = None, config: dict | None = None):
+    """Recover discarded blocks that contain real content.
+
+    MinerU's layout model classifies some real content as "Abandon" (category 2),
+    e.g. styled section headers like "EXERCISE" with colored backgrounds.
+    This function recovers those blocks while filtering out genuinely repeating
+    page elements (running headers, footers, page numbers).
+
+    Decorative/image-like discarded blocks (QR codes, logos, etc.) are handled
+    based on the include_figures / figure_display config:
+      - include_figures=false → skip decorative blocks entirely
+      - figure_display='image' → crop image from PDF, don't OCR
+      - figure_display='text' → OCR as text (current behavior)
+    """
+    import re
+
+    config = config or {}
+    include_figures = config.get('include_figures', True)
+    figure_display = config.get('figure_display', 'image')
+
+    # Phase 1: collect all discarded blocks across all pages
+    all_discarded: list[tuple[int, dict, str]] = []  # (page_idx, block, text)
+    for pi, raw_page in enumerate(pdf_info_raw):
+        for db in raw_page.get('discarded_blocks', []):
+            db_text, _, _, _, _ = _extract_block_content(db, img_dir)
+            text = db_text.strip() if db_text else ''
+            all_discarded.append((pi, db, text))
+
+    if not all_discarded:
+        return
+
+    # Phase 2: count how many pages each normalised text appears on
+    text_page_count: dict[str, set] = {}
+    for pi, _db, text in all_discarded:
+        if not text:
+            continue
+        norm = re.sub(r'<[^>]*>', '', text).strip().lower()
+        norm = re.sub(r'\s+', ' ', norm)
+        if norm not in text_page_count:
+            text_page_count[norm] = set()
+        text_page_count[norm].add(pi)
+
+    # Phase 3: classify and recover discarded blocks.
+    # Repeating text (3+ pages) or page numbers → type='header'/'footer'
+    # Blocks with very little text → likely decorative (QR codes, logos)
+    # Unique text content → type='text' (real content MinerU wrongly abandoned)
+    total_pages = len(pdf_info_raw)
+    page_num_re = re.compile(r'^\d{1,4}$')
+    from collections import defaultdict
+    recovered_per_page: dict[int, list] = defaultdict(list)
+
+    # Open PDF for image cropping if needed
+    fitz_doc = None
+    if pdf_bytes and include_figures and figure_display == 'image':
+        try:
+            import fitz
+            fitz_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        except Exception as e:
+            print(f'[MinerU Server] Could not open PDF for discarded block cropping: {e}')
+
+    try:
+        for pi, db, text in all_discarded:
+            db_bbox = db.get('bbox', [0, 0, 0, 0])
+            page_h = pages[pi]['page_size']['height']
+            is_top_half = db_bbox[1] < page_h * 0.5
+
+            # Check if this is a repeating element (header/footer)
+            if text:
+                norm = re.sub(r'<[^>]*>', '', text).strip().lower()
+                norm = re.sub(r'\s+', ' ', norm)
+                is_repeating = len(text_page_count.get(norm, set())) >= min(3, total_pages)
+                is_page_num = bool(page_num_re.match(norm))
+            else:
+                is_repeating = False
+                is_page_num = False
+
+            if is_repeating or is_page_num:
+                block_type = 'header' if is_top_half else 'footer'
+                block = {
+                    'type': block_type,
+                    'bbox': db_bbox,
+                    'text': text,
+                }
+                recovered_per_page[pi].append(block)
+                print(f'[MinerU Server] Page {pi}: {block_type} block '
+                      f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+                continue
+
+            # Heuristic: blocks with very short text (<=5 chars) or no text
+            # are likely decorative items (QR codes, logos, icons, line art).
+            # Blocks with real text content (>5 chars) are recovered as text.
+            is_decorative = len(text) <= 5
+
+            if is_decorative:
+                if not include_figures:
+                    print(f'[MinerU Server] Page {pi}: skipping decorative block '
+                          f'bbox={[round(x, 1) for x in db_bbox]} (figures excluded)')
+                    continue
+
+                if figure_display == 'image' and fitz_doc and pi < len(fitz_doc):
+                    # Crop image from PDF
+                    block = {
+                        'type': 'image',
+                        'bbox': db_bbox,
+                        'text': text,
+                    }
+                    try:
+                        import base64
+                        import hashlib
+                        pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
+                        from magic_pdf.libs.commons import join_path
+                        from magic_pdf.pipe.operators import cut_image
+                        return_path = join_path(pdf_md5, 'discarded')
+                        img_path = cut_image(
+                            db_bbox, pi, fitz_doc[pi],
+                            return_path=return_path,
+                            imageWriter=FileBasedDataWriter(img_dir),
+                        )
+                        block['img_path'] = img_path
+                        # Embed as base64
+                        img_full_path = os.path.join(img_dir, img_path)
+                        if os.path.exists(img_full_path):
+                            with open(img_full_path, 'rb') as f:
+                                block['img_data'] = base64.b64encode(f.read()).decode('ascii')
+                            ext = os.path.splitext(img_path)[1].lower()
+                            block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+                    except Exception as crop_err:
+                        print(f'[MinerU Server] Failed to crop decorative block on page {pi}: {crop_err}')
+                    recovered_per_page[pi].append(block)
+                    print(f'[MinerU Server] Page {pi}: decorative→image block '
+                          f'bbox={[round(x, 1) for x in db_bbox]}')
+                else:
+                    # figure_display='text' — recover as text (OCR'd)
+                    block = {
+                        'type': 'text',
+                        'bbox': db_bbox,
+                        'text': text or '[Decorative element]',
+                    }
+                    recovered_per_page[pi].append(block)
+                    print(f'[MinerU Server] Page {pi}: decorative→text block '
+                          f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+            else:
+                # Real text content — recover as text block
+                block = {
+                    'type': 'text',
+                    'bbox': db_bbox,
+                    'text': text,
+                }
+                recovered_per_page[pi].append(block)
+                print(f'[MinerU Server] Page {pi}: recovered block '
+                      f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+    finally:
+        if fitz_doc:
+            fitz_doc.close()
+
+    # Extend and sort once per page
+    for pi, new_blocks in recovered_per_page.items():
+        page_blocks = pages[pi]['preproc_blocks']
+        page_blocks.extend(new_blocks)
+        page_blocks.sort(key=lambda b: b.get('bbox', [0, 0, 0, 0])[1])
+
+
 def _is_valid_roman(s: str) -> bool:
     """Check if a string is a valid Roman numeral (i through xxxix)."""
     import re
@@ -303,8 +513,8 @@ def _is_list_item(line: str) -> bool:
     # Bullets: •○▪▫–—➤‣›▶►∙★☆ etc.
     if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
         return True
-    # Arabic numbered: 1. / 1) / (1) / [1]
-    if re.match(r'^\d+[\.\)]\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
+    # Arabic numbered: 1. / 1) / (1) / [1] / 1.1. / 3.2.1. (multi-level)
+    if re.match(r'^(\d+\.)+\s', line) or re.match(r'^\d+\)\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
         return True
     # Letters: (a) / a. / a) / [a]  (excluding roman-ambiguous single letters)
     if re.match(r'^\([a-zA-Z]\)\s', line) or re.match(r'^\[[a-zA-Z]\]\s', line):
@@ -323,8 +533,8 @@ def _is_list_item(line: str) -> bool:
     # (single 'i.' could be alphabetical, but in list context it usually is roman)
     if re.match(r'^[ivxIVX][\.\)]\s', line):
         return True
-    # Section/Article/Part/Chapter/Item/Note/Step prefixes
-    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step)\s+\d', line, re.IGNORECASE):
+    # Section/Article/Part/Chapter/Item/Note/Step/Appendix/References prefixes
+    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References)\b', line, re.IGNORECASE):
         return True
     return False
 
@@ -352,17 +562,21 @@ def _detect_list_content(text: str) -> bool:
     return list_count / len(lines) >= 0.6
 
 
-def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str]:
-    """Extract content from a para_block using MinerU's native merge_para_with_text.
+def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str, list]:
+    """Extract content from a para_block, preserving line breaks.
 
-    Returns: (text, table_html, img_path, latex)
+    Uses line-aware joining instead of MinerU's merge_para_with_text (which
+    joins all lines with spaces, destroying list/MCQ/sub-question structure).
+    Lines within a block are joined with \\n so downstream consumers (list
+    detection, true-copy renderer) can preserve the original line structure.
+
+    Returns: (text, table_html, img_path, latex, inline_equations)
     """
-    from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
-
     block_type = block.get('type', 'text')
     table_html = ''
     img_path = ''
     latex = ''
+    inline_equations = []
 
     # Collect spans from all nested structures for table/image/latex extraction
     all_spans = []
@@ -383,9 +597,9 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
         elif span.get('latex'):
             latex = span['latex']
 
-    # Use MinerU's native text merging for text/title blocks
+    # Extract text preserving line structure
     if block_type in ('text', 'title', 'list', 'index') and block.get('lines'):
-        text = _unescape_markdown(merge_para_with_text(block))
+        text, inline_equations = _join_lines_preserving_breaks(block, img_dir)
     elif block.get('text'):
         text = block['text']
     else:
@@ -393,7 +607,158 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
         text_parts = [s.get('content', '') for s in all_spans if s.get('content', '').strip()]
         text = '\n'.join(text_parts)
 
-    return text, table_html, img_path, latex
+    return text, table_html, img_path, latex, inline_equations
+
+
+def _join_lines_preserving_breaks(block: dict, img_dir: str = '') -> tuple[str, list]:
+    """Join block lines using MinerU's native line-break decisions.
+
+    MinerU's paragraph splitting pipeline tags lines with `is_list_start_line`
+    when they should start on a new line (list items, numbered sections, etc.).
+    We respect those tags instead of reimplementing line-break detection.
+
+    For lines without the tag, we use MinerU's joining convention:
+    - Western text: join with space (paragraph flow)
+    - Dehyphenation: remove trailing hyphen when next line starts lowercase
+
+    Returns: (text, inline_equations) where inline_equations is a list of
+    dicts with {latex, img_data, img_mime, display} for each embedded equation.
+    """
+    CT = ContentType
+    inline_equations = []
+
+    # Collect (line_text, is_list_start) pairs
+    line_entries = []
+    for line in block.get('lines', []):
+        is_list_start = line.get('is_list_start_line', False)
+        parts = []
+        for span in line.get('spans', []):
+            span_type = span.get('type', '')
+            content = span.get('content', '').strip()
+            if not content:
+                continue
+            if span_type in (CT.InterlineEquation, CT.InlineEquation):
+                display = 'block' if span_type == CT.InterlineEquation else 'inline'
+                eq_idx = len(inline_equations)
+                eq_entry = {'latex': content, 'display': display}
+                # Attach image data if available
+                eq_img_path = span.get('image_path', '')
+                if eq_img_path and img_dir:
+                    import base64
+                    full_path = os.path.join(img_dir, eq_img_path)
+                    if os.path.exists(full_path):
+                        with open(full_path, 'rb') as f:
+                            eq_entry['img_data'] = base64.b64encode(f.read()).decode('ascii')
+                        ext = os.path.splitext(eq_img_path)[1].lower()
+                        eq_entry['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+                inline_equations.append(eq_entry)
+                if display == 'block':
+                    parts.append(f'\n{{{{EQ:{eq_idx}}}}}\n')
+                else:
+                    parts.append(f'{{{{EQ:{eq_idx}}}}}')
+            else:
+                parts.append(_unescape_markdown(content))
+        line_text = ' '.join(parts)
+        if line_text.strip():
+            line_entries.append((line_text, is_list_start))
+
+    if not line_entries:
+        return '', []
+
+    # Build final text using MinerU's line-break decisions
+    result = line_entries[0][0]
+    for i in range(1, len(line_entries)):
+        lt, is_list_start = line_entries[i]
+        lt_stripped = lt.strip()
+
+        if is_list_start:
+            # MinerU says this is a new list/section line
+            result += '\n' + lt_stripped
+        else:
+            # Paragraph continuation — join with space
+            # Dehyphenation: remove trailing hyphen when next starts lowercase
+            if result.endswith('-') and lt_stripped and lt_stripped[0].islower():
+                result = result[:-1] + lt_stripped
+            else:
+                result += ' ' + lt_stripped
+
+    return result, inline_equations
+
+
+def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
+    """Merge overflowed text blocks with adjacent empty blocks.
+
+    Detects the pattern where VisionLLM OCR crams text from multiple
+    adjacent layout blocks into one, leaving the rest empty. When found,
+    expands the text block's bbox to cover the empty neighbors.
+
+    This handles MCQ grids, columnar options, form-like layouts, and any
+    structured content where layout detection creates many small blocks
+    but OCR recognizes them as a single unit.
+    """
+    if len(blocks) < 2:
+        return blocks
+
+    # Mark which blocks to skip (absorbed into a previous block)
+    absorbed = set()
+    result = []
+
+    for i, block in enumerate(blocks):
+        if i in absorbed:
+            continue
+
+        text = block.get('text', '').strip()
+        bbox = list(block.get('bbox', [0, 0, 0, 0]))
+        block_h = bbox[3] - bbox[1]
+
+        # Skip non-text blocks, empty blocks, or blocks with enough space
+        if not text or block.get('type') in ('table', 'figure', 'image', 'image_body'):
+            result.append(block)
+            continue
+
+        # Estimate how much height this text needs (rough: ~12px per line)
+        line_count = text.count('\n') + 1
+        min_height_needed = line_count * 10  # conservative estimate
+
+        if block_h >= min_height_needed:
+            result.append(block)
+            continue
+
+        # This block overflows. Look forward for empty adjacent blocks to absorb.
+        x1, y1, x2, y2 = bbox
+        absorbed_this = 0
+        j = i + 1
+        while j < len(blocks):
+            next_block = blocks[j]
+            next_text = next_block.get('text', '').strip()
+            next_bbox = next_block.get('bbox', [0, 0, 0, 0])
+            next_y1 = next_bbox[1]
+
+            # Stop if: non-empty block, or large vertical gap (>5px), or different type
+            gap = next_y1 - y2
+            if next_text or gap > 5:
+                break
+            if next_block.get('type') in ('table', 'figure', 'title', 'image'):
+                break
+
+            # Absorb this empty block: expand bbox
+            y2 = max(y2, next_bbox[3])
+            x1 = min(x1, next_bbox[0])
+            x2 = max(x2, next_bbox[2])
+            absorbed.add(j)
+            absorbed_this += 1
+            j += 1
+
+        if absorbed_this > 0:
+            block = dict(block)  # copy to avoid mutating original
+            block['bbox'] = [x1, y1, x2, y2]
+            new_h = y2 - y1
+            print(f'[MinerU Server] Merged block [{i}] with {absorbed_this} empty neighbors: '
+                  f'{block_h:.0f}px → {new_h:.0f}px ({line_count} lines)')
+
+        result.append(block)
+
+    return result
 
 
 
@@ -584,6 +949,16 @@ class MineruHandler(BaseHTTPRequestHandler):
                 self._handle_export(task, export_format)
                 return
 
+            # GET /tasks/{id}/page_image/{page_idx} — rasterize a page as PNG
+            if len(path_parts) >= 4 and path_parts[2] == 'page_image':
+                try:
+                    page_idx = int(path_parts[3])
+                except ValueError:
+                    self._send_json(400, {'error': 'page_idx must be an integer'})
+                    return
+                self._handle_page_image(task, page_idx)
+                return
+
             # Return task without internal Python objects
             safe_task = {k: v for k, v in task.items() if not k.startswith('_')}
             self._send_json(200, safe_task)
@@ -636,6 +1011,41 @@ class MineruHandler(BaseHTTPRequestHandler):
             traceback.print_exc()
             self._send_json(500, {'error': f'Export failed: {str(e)}'})
 
+    def _handle_page_image(self, task: dict, page_idx: int):
+        """Rasterize a single page as PNG using pymupdf."""
+        import fitz
+
+        if task['status'] != 'completed':
+            self._send_json(400, {'error': f'Task not completed (status: {task["status"]})'})
+            return
+
+        pdf_bytes = task.get('_pdf_bytes')
+        if not pdf_bytes:
+            self._send_json(400, {'error': 'PDF data not available (task may have been cleaned up)'})
+            return
+
+        try:
+            doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+            if page_idx < 0 or page_idx >= len(doc):
+                doc.close()
+                self._send_json(400, {'error': f'page_idx {page_idx} out of range (0-{len(doc)-1})'})
+                return
+
+            page = doc[page_idx]
+            # Rasterize at 150 DPI for good quality without excessive size
+            pixmap = page.get_pixmap(dpi=150)
+            png_bytes = pixmap.tobytes('png')
+            doc.close()
+
+            self.send_response(200)
+            self.send_header('Content-Type', 'image/png')
+            self.send_header('Content-Length', str(len(png_bytes)))
+            self.end_headers()
+            self.wfile.write(png_bytes)
+        except Exception as e:
+            traceback.print_exc()
+            self._send_json(500, {'error': f'Page image rendering failed: {str(e)}'})
+
     def _handle_file_parse(self):
         """Parse multipart form data and start processing."""
         content_type = self.headers.get('Content-Type', '')
@@ -659,7 +1069,7 @@ class MineruHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(content_length)
 
         # Extract file from multipart
-        file_data, file_name = self._parse_multipart(body, boundary)
+        file_data, file_name, fields = self._parse_multipart(body, boundary)
 
         if not file_data:
             self._send_json(400, {'error': 'No file found in request'})
@@ -670,6 +1080,14 @@ class MineruHandler(BaseHTTPRequestHandler):
             self._send_json(429, {'error': 'Server busy, try again later'})
             return
 
+        # Parse display preferences from form fields
+        config = {
+            'formula_display': fields.get('formula_display', 'image'),
+            'table_display': fields.get('table_display', 'rendered'),
+            'include_figures': fields.get('include_figures', 'true').lower() != 'false',
+            'figure_display': fields.get('figure_display', 'image'),
+        }
+
         # Create task and start processing
         task_id = str(uuid.uuid4())
         tasks[task_id] = {
@@ -678,57 +1096,63 @@ class MineruHandler(BaseHTTPRequestHandler):
             'result': None,
             'error': None,
         }
+        _evict_old_tasks()
 
-        print(f'[MinerU Server] Task {task_id} created for {file_name} ({len(file_data)} bytes)')
+        print(f'[MinerU Server] Task {task_id} created for {file_name} ({len(file_data)} bytes), config={config}')
 
         thread = threading.Thread(
             target=process_pdf,
-            args=(task_id, file_data, file_name),
+            args=(task_id, file_data, file_name, config),
             daemon=True,
         )
         thread.start()
 
         self._send_json(200, {'task_id': task_id})
 
-    def _parse_multipart(self, body: bytes, boundary: str) -> tuple[bytes | None, str]:
-        """Extract file data from multipart form body."""
+    def _parse_multipart(self, body: bytes, boundary: str) -> tuple[bytes | None, str, dict[str, str]]:
+        """Extract file data and form fields from multipart form body."""
         boundary_bytes = f'--{boundary}'.encode()
         parts = body.split(boundary_bytes)
+
+        file_data = None
+        file_name = ''
+        fields: dict[str, str] = {}
 
         for part in parts:
             if b'Content-Disposition' not in part:
                 continue
 
-            # Check if this is the file part
             header_end = part.find(b'\r\n\r\n')
             if header_end == -1:
                 continue
 
             header = part[:header_end].decode('utf-8', errors='replace')
-            if 'name="file"' not in header:
-                continue
+            data = part[header_end + 4:]
+            if data.endswith(b'\r\n'):
+                data = data[:-2]
+            if data.endswith(b'--\r\n'):
+                data = data[:-4]
+            if data.endswith(b'--'):
+                data = data[:-2]
+            if data.endswith(b'\r\n'):
+                data = data[:-2]
 
-            # Extract filename
-            file_name = 'document.pdf'
-            if 'filename="' in header:
-                start = header.index('filename="') + len('filename="')
-                end = header.index('"', start)
-                file_name = header[start:end]
+            if 'name="file"' in header:
+                # Extract filename
+                file_name = 'document.pdf'
+                if 'filename="' in header:
+                    start = header.index('filename="') + len('filename="')
+                    end = header.index('"', start)
+                    file_name = header[start:end]
+                file_data = data
+            else:
+                # Extract field name and value
+                import re
+                name_match = re.search(r'name="([^"]+)"', header)
+                if name_match:
+                    fields[name_match.group(1)] = data.decode('utf-8', errors='replace')
 
-            # Extract file data (skip headers, strip trailing \r\n--)
-            file_data = part[header_end + 4:]
-            if file_data.endswith(b'\r\n'):
-                file_data = file_data[:-2]
-            if file_data.endswith(b'--\r\n'):
-                file_data = file_data[:-4]
-            if file_data.endswith(b'--'):
-                file_data = file_data[:-2]
-            if file_data.endswith(b'\r\n'):
-                file_data = file_data[:-2]
-
-            return file_data, file_name
-
-        return None, ''
+        return file_data, file_name, fields
 
 
 def _pre_warm_models():

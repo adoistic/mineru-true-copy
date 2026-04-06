@@ -7,6 +7,7 @@ import type { ExportFormat } from "@/types";
 
 const OUTPUT_FORMATS: { key: ExportFormat; label: string }[] = [
   { key: "html", label: "HTML" },
+  { key: "true_copy_html", label: "True Copy HTML" },
   { key: "markdown", label: "Markdown" },
   { key: "searchable_pdf", label: "Searchable PDF" },
   { key: "epub", label: "EPUB" },
@@ -22,11 +23,14 @@ export default function OcrTool() {
       : ""
   );
   const [selectedFormats, setSelectedFormats] = useState<Set<ExportFormat>>(
-    new Set(["markdown"])
+    new Set(OUTPUT_FORMATS.map(f => f.key))
   );
+  const [includeBenchmarkHtml, setIncludeBenchmarkHtml] = useState(false);
   const [removeHeaders, setRemoveHeaders] = useState(false);
-  const [formulaDisplay, setFormulaDisplay] = useState<'rendered' | 'image'>('rendered');
+  const [includeFigures, setIncludeFigures] = useState(true);
+  const [formulaDisplay, setFormulaDisplay] = useState<'rendered' | 'image'>('image');
   const [tableDisplay, setTableDisplay] = useState<'rendered' | 'image'>('rendered');
+  const [figureDisplay, setFigureDisplay] = useState<'image' | 'text'>('image');
   const [jobIds, setJobIds] = useState<string[]>([]);
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -70,6 +74,9 @@ export default function OcrTool() {
             remove_headers_footers: removeHeaders,
             formula_display: formulaDisplay,
             table_display: tableDisplay,
+            include_figures: includeFigures,
+            figure_display: figureDisplay,
+            include_benchmark_images: includeBenchmarkHtml,
           })
         );
 
@@ -104,7 +111,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, outputFolder, removeHeaders, formulaDisplay, tableDisplay]);
+  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -325,7 +332,79 @@ export default function OcrTool() {
             </button>
           </label>
 
+          {/* Include decorative items */}
+          <div>
+            <label className="flex items-center justify-between">
+              <span className="text-sm text-slate-700 dark:text-slate-300">
+                Include decorative items
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={includeFigures}
+                onClick={() => setIncludeFigures(!includeFigures)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  includeFigures ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
+                    includeFigures ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Images, diagrams, and illustrations. Sometimes actual content can be classified as decorative, so we recommend keeping this on.
+            </p>
+            {includeFigures && (
+              <div className="mt-2">
+                <select
+                  value={figureDisplay}
+                  onChange={(e) => setFigureDisplay(e.target.value as 'image' | 'text')}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value="image">Include as image</option>
+                  <option value="text">Include as text placeholder</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {figureDisplay === 'image'
+                    ? "Embeds the original cropped image from the document."
+                    : "Shows a text placeholder where the image was detected."}
+                </p>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* Benchmark image overlay — only visible when True Copy HTML is selected */}
+        {selectedFormats.has("true_copy_html") && (
+          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-600 dark:bg-slate-700/50">
+            <label className="flex items-center justify-between">
+              <span className="text-sm text-slate-700 dark:text-slate-300">
+                Include benchmark version with images
+              </span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={includeBenchmarkHtml}
+                onClick={() => setIncludeBenchmarkHtml(!includeBenchmarkHtml)}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  includeBenchmarkHtml ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
+                    includeBenchmarkHtml ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            </label>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              Generates an additional true-copy HTML file that overlays OCR text on original page images, so you can visually verify accuracy. Increases file size significantly.
+            </p>
+          </div>
+        )}
 
         {/* Display mode selects */}
         <div className="grid grid-cols-2 gap-4">
@@ -338,9 +417,14 @@ export default function OcrTool() {
               onChange={(e) => setFormulaDisplay(e.target.value as 'rendered' | 'image')}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
             >
-              <option value="rendered">Rendered (KaTeX)</option>
-              <option value="image">Original Image</option>
+              <option value="image">Original Image (recommended)</option>
+              <option value="rendered">Rendered Text</option>
             </select>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {formulaDisplay === 'image'
+                ? "Shows the original formula as it appears in the document."
+                : "Attempts to reconstruct formulas as rendered text. Extraction can sometimes be inaccurate for complex equations."}
+            </p>
           </div>
           <div>
             <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
@@ -351,9 +435,14 @@ export default function OcrTool() {
               onChange={(e) => setTableDisplay(e.target.value as 'rendered' | 'image')}
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
             >
-              <option value="rendered">Rendered (HTML)</option>
+              <option value="rendered">Rendered Table</option>
               <option value="image">Original Image</option>
             </select>
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+              {tableDisplay === 'image'
+                ? "Shows the original table as it appears in the document."
+                : "Reconstructs tables as editable HTML. Structure extraction may vary for complex layouts."}
+            </p>
           </div>
         </div>
       </div>

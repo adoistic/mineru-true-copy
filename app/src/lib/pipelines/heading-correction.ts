@@ -258,7 +258,7 @@ export class HeadingCorrectionPipeline implements Pipeline {
   ): Promise<PipelineResult> {
     const config = job.tool_config as unknown as ProcessingOptions;
     const baseName = path.parse(job.file_name).name;
-    const jsonPath = path.join(config.output_folder, `${baseName}_mineru.json`);
+    const jsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
 
     try {
       // Step 1: Read MinerU JSON
@@ -271,7 +271,7 @@ export class HeadingCorrectionPipeline implements Pipeline {
       });
 
       if (!fs.existsSync(jsonPath)) {
-        throw new Error(`MinerU JSON not found at ${jsonPath}. Run OCR pipeline first.`);
+        throw new Error(`OCR data not found at ${jsonPath}. Run OCR pipeline first.`);
       }
 
       const mineruOutput: MineruOutput = JSON.parse(
@@ -339,20 +339,28 @@ export class HeadingCorrectionPipeline implements Pipeline {
         message: 'Re-exporting with corrected headings...',
       });
 
-      const htmlOptions = {
-        removeHeadersFooters: config.remove_headers_footers ?? false,
-        removeMetadata: config.remove_metadata ?? false,
-        joinBrokenPages: config.join_broken_pages ?? false,
-        pageRange: config.page_range,
-      };
-
       const outputFiles = await exportAll({
         mineruOutput,
-        htmlOptions,
         formats: config.output_formats,
         outputFolder: config.output_folder,
         baseName,
         originalPdfPath: job.file_path,
+        removeHeadersFooters: config.remove_headers_footers ?? false,
+        formulaDisplay: config.formula_display === 'image' ? 'image' : 'rendered',
+        tableDisplay: config.table_display === 'image' ? 'image' : 'rendered',
+        includeFigures: config.include_figures ?? true,
+        figureDisplay: config.figure_display ?? 'image',
+        includeBenchmarkImages: config.include_benchmark_images ?? false,
+        htmlOptions: {
+          removeHeadersFooters: config.remove_headers_footers ?? false,
+          removeMetadata: config.remove_metadata ?? false,
+          joinBrokenPages: config.join_broken_pages ?? false,
+          pageRange: config.page_range,
+          formulaDisplay: config.formula_display === 'image' ? 'image' : 'rendered',
+          tableDisplay: config.table_display === 'image' ? 'image' : 'rendered',
+          includeFigures: config.include_figures ?? true,
+          figureDisplay: config.figure_display ?? 'image',
+        },
       });
 
       return {
