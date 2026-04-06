@@ -115,8 +115,12 @@ function renderRegion(region: MineruRegion): string {
     const isBold = region.type === 'title' || /<strong>/i.test(region.content);
     const hasBreaks = rawText.includes('\n');
     // Use sanitizeFormattedText to preserve <strong>, <em>, etc. and render LaTeX
+    // Pass inline_equations so {{EQ:N}} placeholders get replaced with rendered equations
     // For pre-wrap regions, keep \n as-is (browser renders them); otherwise convert to <br>
-    content = sanitizeFormattedText(region.content);
+    content = sanitizeFormattedText(region.content, {
+      formulaDisplay: 'image',
+      inlineEquations: region.inline_equations,
+    });
     if (!hasBreaks) content = content.replace(/\n/g, '<br>');
     dataAttrs = ` data-raw-text="${escapeAttr(rawText)}" data-fit="true"${isBold ? ' data-bold="1"' : ''}${hasBreaks ? ' data-prewrap="1"' : ''}`;
   }

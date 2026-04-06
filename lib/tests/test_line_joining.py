@@ -1,11 +1,14 @@
-"""Tests for text merging (via MinerU native) and heading hierarchy heuristic."""
+"""Tests for text merging, list detection, sidebar detection, and heading hierarchy."""
 import sys
 import os
 
 # Add project root to path so we can import mineru_server
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 
-from mineru_server import _unescape_markdown, _extract_block_content, _assign_heading_levels
+from mineru_server import (
+    _unescape_markdown, _extract_block_content, _assign_heading_levels,
+    _is_list_item, _detect_list_content, _is_decorative_sidebar,
+)
 from magic_pdf.config.ocr_content_type import ContentType
 
 
@@ -53,10 +56,10 @@ class TestUnescapeMarkdown:
 
 
 class TestExtractBlockContent:
-    """Tests for _extract_block_content using MinerU's native merge_para_with_text."""
+    """Tests for _extract_block_content using _join_lines_for_html."""
 
     def test_western_text_joins_with_spaces(self):
-        """Non-equation blocks use MinerU's merge_para_with_text (space-joined)."""
+        """Non-list text lines are joined with spaces for paragraph flow."""
         block = _make_block([
             ['Hello, my name is'],
             ['Claude and I help'],
@@ -254,3 +257,156 @@ class TestAssignHeadingLevels:
         ]
         _assign_heading_levels(pdf_info)
         assert pdf_info[0]['para_blocks'][0]['level'] == pdf_info[1]['para_blocks'][0]['level']
+
+
+class TestIsListItem:
+    """Tests for content-based list item detection."""
+
+    def test_bullet_dash(self):
+        assert _is_list_item('- First item')
+
+    def test_bullet_unicode(self):
+        assert _is_list_item('\u2022 Bullet point')  # •
+
+    def test_numbered_dot(self):
+        assert _is_list_item('1. First item')
+
+    def test_numbered_paren(self):
+        assert _is_list_item('1) First item')
+
+    def test_numbered_in_parens(self):
+        assert _is_list_item('(1) First item')
+
+    def test_lettered_paren(self):
+        assert _is_list_item('(a) Option alpha')
+
+    def test_lettered_dot(self):
+        assert _is_list_item('a. Option alpha')
+
+    def test_roman_in_parens(self):
+        assert _is_list_item('(i) Sub-question one')
+
+    def test_roman_ii_in_parens(self):
+        assert _is_list_item('(ii) Sub-question two')
+
+    def test_roman_iv_in_parens(self):
+        assert _is_list_item('(iv) Sub-question four')
+
+    def test_section_number(self):
+        assert _is_list_item('1.1. Subsection')
+
+    def test_multi_level_section(self):
+        assert _is_list_item('2.3.1. Deep section')
+
+    def test_plain_text_not_list(self):
+        assert not _is_list_item('This is just a sentence.')
+
+    def test_number_in_sentence_not_list(self):
+        assert not _is_list_item('The year 2024 was eventful.')
+
+    def test_section_keyword(self):
+        assert _is_list_item('Section 3: Analysis')
+
+    def test_chapter_keyword(self):
+        assert _is_list_item('Chapter 1')
+
+
+class TestDetectListContent:
+    """Tests for block-level list reclassification."""
+
+    def test_mcq_block_detected_as_list(self):
+        """REGRESSION: MCQ exercise content must be reclassified as list."""
+        text = '(i) A landmass bounded by sea\n(a) Coast (c) Peninsula\n(b) Island (d) None\n(ii) Mountain ranges'
+        assert _detect_list_content(text)
+
+    def test_numbered_list_detected(self):
+        text = '(1) The Himalayan Mountains\n(2) The Northern Plains\n(3) The Peninsular Plateau'
+        assert _detect_list_content(text)
+
+    def test_plain_paragraph_not_list(self):
+        text = 'India is a vast country.\nIt has diverse geography.\nThe climate varies widely.'
+        assert not _detect_list_content(text)
+
+    def test_single_line_not_list(self):
+        text = '(1) Only one item'
+        assert not _detect_list_content(text)
+
+    def test_mixed_content_below_threshold(self):
+        """Less than 60% list items → stays as text."""
+        text = 'Introduction paragraph.\nSome more text.\nAnother line.\n1. One list item\n2. Two list item'
+        assert not _detect_list_content(text)
+
+
+class TestLinePreservationRegression:
+    """REGRESSION TESTS: Ensure list sub-items preserve \\n between lines."""
+
+    def test_mcq_lines_preserved(self):
+        """Exercise page MCQ items must NOT be joined into one paragraph."""
+        block = _make_block([
+            ['(i) A landmass bounded by sea on three sides is referred to as'],
+            ['(a) Coast (c) Peninsula'],
+            ['(b) Island (d) None of the above'],
+            ['(ii) Mountain ranges in the eastern part of India forming its boundary with Myanmar are collectively called as'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        lines = text.split('\n')
+        assert len(lines) >= 4, f'Expected 4+ lines, got {len(lines)}: {text!r}'
+        assert any('(i)' in l for l in lines)
+        assert any('(ii)' in l for l in lines)
+
+    def test_numbered_list_lines_preserved(self):
+        """Numbered list items must be on separate lines."""
+        block = _make_block([
+            ['(1) The Himalayan Mountains'],
+            ['(2) The Northern Plains'],
+            ['(3) The Peninsular Plateau'],
+            ['(4) The Indian Desert'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        lines = text.split('\n')
+        assert len(lines) == 4, f'Expected 4 lines, got {len(lines)}: {text!r}'
+
+    def test_plain_paragraph_still_joins(self):
+        """Non-list prose lines should still be joined with spaces."""
+        block = _make_block([
+            ['India is a vast country with'],
+            ['diverse geography spanning from'],
+            ['the Himalayas to the Indian Ocean.'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        # Should be one flowing paragraph, not 3 separate lines
+        assert '\n' not in text
+        assert 'country with diverse' in text
+
+
+class TestDecorativeSidebar:
+    """Tests for narrow vertical strip detection."""
+
+    def test_narrow_vertical_strip(self):
+        block = {'bbox': [15, 209, 37, 585], 'type': 'text'}
+        # width=22, height=376, aspect=17.1
+        assert _is_decorative_sidebar(block)
+
+    def test_normal_text_block(self):
+        block = {'bbox': [72, 100, 540, 130], 'type': 'text'}
+        # width=468, height=30 — normal text block
+        assert not _is_decorative_sidebar(block)
+
+    def test_wide_tall_block(self):
+        block = {'bbox': [50, 50, 200, 700], 'type': 'text'}
+        # width=150, height=650 — tall but not narrow enough
+        assert not _is_decorative_sidebar(block)
+
+    def test_bbox_fs_key(self):
+        """MinerU para_blocks use bbox_fs instead of bbox after para_split."""
+        block = {'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
+        assert _is_decorative_sidebar(block)
+
+    def test_bbox_fs_preferred_over_bbox(self):
+        """bbox_fs should take precedence over bbox when both exist."""
+        block = {'bbox': [0, 0, 500, 50], 'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
+        assert _is_decorative_sidebar(block)
+
+    def test_missing_bbox(self):
+        block = {'type': 'text'}
+        assert not _is_decorative_sidebar(block)

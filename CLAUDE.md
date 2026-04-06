@@ -35,6 +35,27 @@ Even in these cases, we are extending MinerU, not replacing it. If you find your
 regex to detect list items, numbered sections, or paragraph boundaries — STOP. MinerU already
 did this work during its pipeline. Use its tags and decisions.
 
+## Starting the App
+
+When the user says "start the app", "open the app", "launch the app", or similar,
+start ALL of the following processes — not just one:
+
+**CRITICAL:** Source `.env` before starting any process. The MinerU server uses VisionLLM OCR
+which requires `OPENROUTER_API_KEY`. Without it, all OCR silently fails and outputs are empty.
+Use: `export $(grep -v '^#' .env | grep -v '^\s*$' | xargs)` from the project root.
+
+1. **MinerU server** (Python sidecar): `./test-venv/bin/python mineru_server.py --port <random>`
+2. **Next.js main app**: `MINERU_API_URL="http://localhost:<mineru_port>" npx next dev --port <random>` (from `app/`)
+3. **Admin app**: `npx next dev --port <random>` (from `admin/`)
+4. **Tauri desktop app**: `cargo tauri dev` (from project root, after Next.js is up)
+5. **Open browser tabs** for the main app and admin app
+
+Use random high ports (49152-65000) for all services to avoid conflicts.
+Use `localhost` (not `127.0.0.1`) for all URLs — Firebase Auth authorizes `localhost` by default.
+The Tauri `devUrl` in `src-tauri/tauri.conf.json` must match the Next.js port.
+Wait for MinerU model warm-up (`/health` returns `{"status": "ok"}`) before launching Tauri.
+PATH must include `/opt/homebrew/bin` for Node and `/Users/siraj/.cargo/bin` for Cargo.
+
 ## Skill routing
 
 When the user's request matches an available skill, ALWAYS invoke it using the Skill

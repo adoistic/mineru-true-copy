@@ -171,9 +171,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         ds = PymuDocDataset(pdf_bytes, lang='en')
 
         # Step 1: Model inference (layout detection + OCR)
-        # Skip UniMerNet when user only wants formula images (no LaTeX recognition needed)
-        # Skip table structure recognition when user only wants table images
-        formula_enable = config.get('formula_display') != 'image'
+        # formula_enable controls UniMerNet (LaTeX recognition), NOT formula detection.
+        # The layout model always detects equation bounding boxes regardless.
+        # When formula_display='image', we still need detection (for bounding boxes to crop)
+        # but can skip LaTeX recognition (UniMerNet) since we'll show images.
+        # HOWEVER: MinerU's formula_enable=False skips the ENTIRE formula pipeline,
+        # including detection. So we must always enable it.
+        formula_enable = True
         table_enable = config.get('table_display') != 'image'
         t1 = time.time()
         infer_result = ds.apply(
@@ -247,7 +251,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             blocks = []
             for b in para_blocks:
                 block_type = b.get('type', 'text')
-                bbox = b.get('bbox', [0, 0, 0, 0])
+                bbox = b.get('bbox_fs', b.get('bbox', [0, 0, 0, 0]))
 
                 # Debug: log image/figure blocks
                 if block_type in ('image', 'image_body', 'figure'):
@@ -257,6 +261,39 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # Extract content from the nested structure:
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
                 text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir)
+
+                # Content-based list reclassification: MinerU's geometric heuristics
+                # miss MCQ patterns like (i), (a), (b). Our regex catches them.
+                if block_type == 'text' and text and _detect_list_content(text):
+                    block_type = 'list'
+
+                # Decorative sidebar detection: narrow vertical strips (arXiv IDs,
+                # watermarks) classified as text by MinerU → crop as image
+                if (block_type == 'text'
+                        and config.get('figure_display') == 'image'
+                        and _is_decorative_sidebar(b)):
+                    block_type = 'image'
+                    try:
+                        import fitz
+                        import base64
+                        import hashlib
+                        from magic_pdf.libs.commons import join_path
+                        doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+                        pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
+                        return_path = join_path(pdf_md5, 'sidebar')
+                        sidebar_img_path = cut_image(
+                            bbox, page_idx, doc[page_idx],
+                            return_path=return_path,
+                            imageWriter=FileBasedDataWriter(img_dir),
+                        )
+                        doc.close()
+                        img_path = sidebar_img_path
+                        text = ''  # No text content for image blocks
+                        print(f'[MinerU Server] Page {page_idx}: sidebar→image '
+                              f'bbox={[round(x, 1) for x in bbox]}')
+                    except Exception as e:
+                        print(f'[MinerU Server] Failed to crop sidebar on page {page_idx}: {e}')
+                        block_type = 'text'  # Fall back to text if crop fails
 
                 block = {
                     'type': block_type,
@@ -446,7 +483,6 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                         import hashlib
                         pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
                         from magic_pdf.libs.commons import join_path
-                        from magic_pdf.pipe.operators import cut_image
                         return_path = join_path(pdf_md5, 'discarded')
                         img_path = cut_image(
                             db_bbox, pi, fitz_doc[pi],
@@ -507,24 +543,82 @@ def _unescape_markdown(text: str) -> str:
     return text.replace('\\*', '*').replace('\\`', '`').replace('\\~', '~')
 
 
-def _has_inline_equations(block: dict) -> bool:
-    """Check if a block contains any equation spans."""
-    for line in block.get('lines', []):
-        for span in line.get('spans', []):
-            if span.get('type') in (ContentType.InlineEquation, ContentType.InterlineEquation):
-                return True
+def _is_valid_roman(s: str) -> bool:
+    """Check if a string is a valid Roman numeral (i through xxxix)."""
+    import re
+    return bool(re.match(r'^(?:x{0,3})(?:ix|iv|v?i{0,3})$', s.lower())) and len(s) > 0
+
+
+def _is_list_item(line: str) -> bool:
+    """Detect whether a line starts with any list/bullet/numbering pattern."""
+    import re
+    # Bullets: •○▪▫–—➤‣›▶►∙★☆ etc.
+    if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
+        return True
+    # Arabic numbered: 1. / 1) / (1) / [1] / 1.1. / 3.2.1. (multi-level)
+    if re.match(r'^(\d+\.)+\s', line) or re.match(r'^\d+\)\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
+        return True
+    # Letters: (a) / a. / a) / [a]  (excluding roman-ambiguous single letters)
+    if re.match(r'^\([a-zA-Z]\)\s', line) or re.match(r'^\[[a-zA-Z]\]\s', line):
+        return True
+    if re.match(r'^[a-zA-Z][\.\)]\s', line):
+        return True
+    # Roman numerals in parens: (i), (ii), (iii), (iv), (v), (vi), etc.
+    m = re.match(r'^\(([ivxlcdm]+)\)\s', line, re.IGNORECASE)
+    if m and _is_valid_roman(m.group(1)):
+        return True
+    # Bare roman with 2+ chars: ii. / iii) / iv.  (avoids ambiguity with single letters)
+    m = re.match(r'^([ivxlcdm]{2,})[\.\)]\s', line, re.IGNORECASE)
+    if m and _is_valid_roman(m.group(1)):
+        return True
+    # Single roman i/v/x with period/paren — ambiguous, treat as list item
+    if re.match(r'^[ivxIVX][\.\)]\s', line):
+        return True
+    # Section/Article/Part/Chapter/Item/Note/Step/Appendix/References prefixes
+    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References)\b', line, re.IGNORECASE):
+        return True
     return False
+
+
+def _detect_list_content(text: str) -> bool:
+    """Check if a text block's content is predominantly list items.
+
+    Returns True if the block should be converted to a 'list' type.
+    """
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    if len(lines) < 2:
+        return False
+    list_count = sum(1 for l in lines if _is_list_item(l))
+    # If at least 60% of lines are list items, treat as list block
+    return list_count / len(lines) >= 0.6
+
+
+def _is_decorative_sidebar(block: dict) -> bool:
+    """Detect narrow vertical strips that are decorative metadata.
+
+    ArXiv IDs, watermarks, vertical barcodes — MinerU classifies these as
+    text blocks but they're decorative. Identified by extreme aspect ratio
+    (very tall relative to width) and absolute narrowness.
+    """
+    bbox = block.get('bbox_fs', block.get('bbox', [0, 0, 0, 0]))
+    width = bbox[2] - bbox[0]
+    height = bbox[3] - bbox[1]
+    if width <= 0 or height <= 0:
+        return False
+    aspect_ratio = height / width
+    return aspect_ratio > 8 and width < 50
 
 
 def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str, list]:
     """Extract content from a para_block.
 
-    For blocks WITHOUT equations: delegates to MinerU's merge_para_with_text()
-    for language-aware joining, dehyphenation, CJK spacing, and list breaks.
+    Uses _join_lines_for_html() for ALL text/title/list/index blocks in the
+    HTML/JSON pipeline. This preserves line structure (\\n between lines) which
+    the client-side HTML converter needs to create separate <p> tags.
 
-    For blocks WITH equations: uses _join_lines_for_html() to produce
-    {{EQ:index}} placeholders with base64 image data (merge_para_with_text
-    wraps equations in $...$ which doesn't carry image data).
+    MinerU's merge_para_with_text() is NOT used here — it joins lines with
+    spaces (correct for markdown, wrong for HTML). The markdown export path
+    uses merge_para_with_text() via pipe_result.get_markdown() separately.
 
     Returns: (text, table_html, img_path, latex, inline_equations)
     """
@@ -553,15 +647,9 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
         elif span.get('latex'):
             latex = span['latex']
 
-    # Extract text: use MinerU native for non-equation blocks, custom for equations
+    # Extract text: use _join_lines_for_html() for ALL blocks in the HTML pipeline
     if block_type in ('text', 'title', 'list', 'index') and block.get('lines'):
-        if _has_inline_equations(block):
-            # Equation blocks need {{EQ:index}} placeholders with image data
-            text, inline_equations = _join_lines_for_html(block, img_dir)
-        else:
-            # Non-equation blocks: delegate entirely to MinerU's native joiner
-            from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
-            text = _unescape_markdown(merge_para_with_text(block))
+        text, inline_equations = _join_lines_for_html(block, img_dir)
     elif block.get('text'):
         text = block['text']
     else:
@@ -573,15 +661,21 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
 
 
 def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
-    """Join block lines for HTML rendering, handling equation placeholders.
+    """Join block lines for HTML rendering, preserving line structure.
 
-    Only used for blocks containing inline/interline equation spans.
-    Non-equation blocks use MinerU's merge_para_with_text() directly.
+    Used for ALL text/title/list/index blocks in the HTML/JSON pipeline.
+    Adds \\n between lines using two complementary detection methods:
 
-    This function follows MinerU's joining conventions (is_list_start_line
-    tags, dehyphenation) but replaces equation spans with {{EQ:index}}
-    placeholders carrying base64 image data, which merge_para_with_text()
-    cannot do (it wraps equations in $...$ markdown delimiters).
+    1. MinerU's is_list_start_line geometric tags (alignment, indentation)
+    2. Content-based _is_list_item() regex (bullets, numbering, MCQ patterns)
+
+    Lines without either signal are joined with spaces (paragraph flow)
+    with dehyphenation. Equation spans become {{EQ:index}} placeholders
+    carrying base64 image data.
+
+    This is NOT a reimplementation of merge_para_with_text(). That function
+    is for markdown output (used by get_markdown()). This function is for
+    HTML rendering where \\n characters create separate <p> tags.
 
     Returns: (text, inline_equations) where inline_equations is a list of
     dicts with {latex, img_data, img_mime, display} for each embedded equation.
@@ -627,14 +721,14 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
     if not line_entries:
         return '', []
 
-    # Build final text using MinerU's line-break decisions
+    # Build final text using MinerU's geometric tags + content-based detection
     result = line_entries[0][0]
     for i in range(1, len(line_entries)):
         lt, is_list_start = line_entries[i]
         lt_stripped = lt.strip()
 
-        if is_list_start:
-            # MinerU says this is a new list/section line
+        if is_list_start or _is_list_item(lt_stripped):
+            # MinerU geometric tag OR content pattern → new line
             result += '\n' + lt_stripped
         else:
             # Paragraph continuation — join with space
