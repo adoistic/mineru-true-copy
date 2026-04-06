@@ -186,11 +186,14 @@ export function regionToHtml(region: MineruRegion, options: RegionRenderOptions)
         const caption = region.content ? sanitizeFormattedText(region.content, formulaOpts) : '[Image]';
         return `<p>${caption}</p>`;
       }
-      const imgTag = region.img_data && region.img_mime
-        ? `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`
-        : '';
-      const caption = region.content ? `<figcaption>${sanitizeFormattedText(region.content, formulaOpts)}</figcaption>` : '';
-      return `<figure>${imgTag}${caption}</figure>`;
+      // Image mode: only render if we have actual image data
+      if (region.img_data && region.img_mime) {
+        const imgTag = `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content)}" style="max-width:100%">`;
+        const caption = region.content ? `<figcaption>${sanitizeFormattedText(region.content, formulaOpts)}</figcaption>` : '';
+        return `<figure>${imgTag}${caption}</figure>`;
+      }
+      // No image data available — skip rather than showing text in image mode
+      return '';
     }
 
     case 'list':

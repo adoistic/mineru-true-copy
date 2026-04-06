@@ -325,6 +325,36 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                     else:
                         print(f'[MinerU Server] WARNING: Image file not found: {img_full_path}')
 
+                # Fallback crop: figure/image blocks without img_data — crop from PDF
+                if (block_type in ('image', 'image_body', 'figure')
+                        and 'img_data' not in block
+                        and config.get('figure_display') == 'image'
+                        and pdf_bytes):
+                    try:
+                        import fitz as _fitz
+                        import base64
+                        import hashlib
+                        from magic_pdf.libs.commons import join_path
+                        _doc = _fitz.open(stream=pdf_bytes, filetype='pdf')
+                        _pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
+                        crop_path = cut_image(
+                            bbox, page_idx, _doc[page_idx],
+                            return_path=join_path(_pdf_md5, 'figure_crop'),
+                            imageWriter=FileBasedDataWriter(img_dir),
+                        )
+                        _doc.close()
+                        img_full = os.path.join(img_dir, crop_path)
+                        if os.path.exists(img_full):
+                            with open(img_full, 'rb') as f:
+                                block['img_data'] = base64.b64encode(f.read()).decode('ascii')
+                            ext = os.path.splitext(crop_path)[1].lower()
+                            block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+                            block['img_path'] = crop_path
+                            print(f'[MinerU Server] Page {page_idx}: fallback crop for {block_type} '
+                                  f'bbox={[round(x, 1) for x in bbox]}')
+                    except Exception as e:
+                        print(f'[MinerU Server] Failed to fallback-crop {block_type} on page {page_idx}: {e}')
+
                 blocks.append(block)
 
             # Post-OCR pass: merge overflowed blocks with adjacent empty blocks.
