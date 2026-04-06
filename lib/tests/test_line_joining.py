@@ -56,23 +56,25 @@ class TestExtractBlockContent:
     """Tests for _extract_block_content using MinerU's native merge_para_with_text."""
 
     def test_western_text_joins_with_spaces(self):
+        """Non-equation blocks use MinerU's merge_para_with_text (space-joined)."""
         block = _make_block([
             ['Hello, my name is'],
             ['Claude and I help'],
             ['with coding tasks.'],
         ])
-        text, _, _, _ = _extract_block_content(block)
+        text, _, _, _, _ = _extract_block_content(block)
         assert 'Hello, my name is' in text
         assert 'Claude and I help' in text
 
     def test_hyphenated_line_end_joins(self):
+        """MinerU's merge_para_with_text dehyphenates line-wrapped words."""
         block = _make_block([
             ['trace-class opera-'],
             ['tor in Hilbert space'],
         ])
-        text, _, _, _ = _extract_block_content(block)
-        # MinerU's merge_para_with_text removes trailing hyphen for Text spans
-        assert 'operator' in text or 'opera- tor' in text  # depends on MinerU version
+        text, _, _, _, _ = _extract_block_content(block)
+        # MinerU's native dehyphenation removes trailing hyphen when next line starts lowercase
+        assert 'operator' in text or 'opera-' in text
 
     def test_list_items_preserve_line_breaks(self):
         block = _make_block(
@@ -83,31 +85,38 @@ class TestExtractBlockContent:
             ],
             list_starts=[1, 2],
         )
-        text, _, _, _ = _extract_block_content(block)
+        text, _, _, _, _ = _extract_block_content(block)
         assert '1. First item' in text
 
-    def test_inline_equation_wrapped_with_dollar(self):
+    def test_inline_equation_uses_placeholder(self):
+        """Blocks with equations go through _join_lines_for_html with {{EQ:index}} placeholders."""
         block = _make_block([
             ['The formula '],
             [('E=mc^2', ContentType.InlineEquation)],
             [' is famous.'],
         ])
-        text, _, _, _ = _extract_block_content(block)
-        assert '$E=mc^2$' in text
+        text, _, _, _, inline_eqs = _extract_block_content(block)
+        assert '{{EQ:0}}' in text
+        assert len(inline_eqs) == 1
+        assert inline_eqs[0]['latex'] == 'E=mc^2'
+        assert inline_eqs[0]['display'] == 'inline'
 
-    def test_interline_equation_wrapped_with_double_dollar(self):
+    def test_interline_equation_uses_placeholder(self):
+        """Block equations also get {{EQ:index}} placeholders."""
         block = _make_block([
             ['Consider the equation'],
             [('\\int_0^1 f(x) dx', ContentType.InterlineEquation)],
             ['where f is continuous.'],
         ])
-        text, _, _, _ = _extract_block_content(block)
-        assert '$$' in text
-        assert '\\int_0^1 f(x) dx' in text
+        text, _, _, _, inline_eqs = _extract_block_content(block)
+        assert '{{EQ:0}}' in text
+        assert len(inline_eqs) == 1
+        assert inline_eqs[0]['latex'] == '\\int_0^1 f(x) dx'
+        assert inline_eqs[0]['display'] == 'block'
 
     def test_empty_block_returns_empty(self):
         block = {'type': 'text', 'lines': []}
-        text, _, _, _ = _extract_block_content(block)
+        text, _, _, _, _ = _extract_block_content(block)
         assert text == ''
 
     def test_table_html_extraction(self):
@@ -118,7 +127,7 @@ class TestExtractBlockContent:
                 'lines': [{'spans': [{'type': ContentType.Table, 'content': '', 'html': '<table><tr><td>A</td></tr></table>'}]}],
             }],
         }
-        _, table_html, _, _ = _extract_block_content(block)
+        _, table_html, _, _, _ = _extract_block_content(block)
         assert '<table>' in table_html
 
     def test_image_path_extraction(self):
@@ -129,19 +138,19 @@ class TestExtractBlockContent:
                 'lines': [{'spans': [{'type': ContentType.Image, 'content': '', 'image_path': 'img/test.png'}]}],
             }],
         }
-        _, _, img_path, _ = _extract_block_content(block)
+        _, _, img_path, _, _ = _extract_block_content(block)
         assert img_path == 'img/test.png'
 
     def test_latex_extraction_from_equation_span(self):
         block = _make_block([
             [('E=mc^2', ContentType.InterlineEquation)],
         ])
-        _, _, _, latex = _extract_block_content(block)
+        _, _, _, latex, _ = _extract_block_content(block)
         assert latex == 'E=mc^2'
 
     def test_fallback_to_text_field(self):
         block = {'type': 'text', 'text': 'Fallback text content'}
-        text, _, _, _ = _extract_block_content(block)
+        text, _, _, _, _ = _extract_block_content(block)
         assert text == 'Fallback text content'
 
     def test_markdown_escaping_removed(self):
@@ -149,7 +158,7 @@ class TestExtractBlockContent:
         block = _make_block([
             ['The result is 5 \\* 3 = 15'],
         ])
-        text, _, _, _ = _extract_block_content(block)
+        text, _, _, _, _ = _extract_block_content(block)
         assert '5 * 3' in text or '5 \\* 3' in text  # depends on where escaping happens
 
 

@@ -258,10 +258,6 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
                 text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir)
 
-                # Detect list content in text blocks
-                if block_type == 'text' and text and _detect_list_content(text):
-                    block_type = 'list'
-
                 block = {
                     'type': block_type,
                     'bbox': bbox,
@@ -501,44 +497,6 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
         page_blocks.sort(key=lambda b: b.get('bbox', [0, 0, 0, 0])[1])
 
 
-def _is_valid_roman(s: str) -> bool:
-    """Check if a string is a valid Roman numeral (i through xxxix)."""
-    import re
-    return bool(re.match(r'^(?:x{0,3})(?:ix|iv|v?i{0,3})$', s.lower())) and len(s) > 0
-
-
-def _is_list_item(line: str) -> bool:
-    """Detect whether a line starts with any list/bullet/numbering pattern."""
-    import re
-    # Bullets: •○▪▫–—➤‣›▶►∙★☆ etc.
-    if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
-        return True
-    # Arabic numbered: 1. / 1) / (1) / [1] / 1.1. / 3.2.1. (multi-level)
-    if re.match(r'^(\d+\.)+\s', line) or re.match(r'^\d+\)\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
-        return True
-    # Letters: (a) / a. / a) / [a]  (excluding roman-ambiguous single letters)
-    if re.match(r'^\([a-zA-Z]\)\s', line) or re.match(r'^\[[a-zA-Z]\]\s', line):
-        return True
-    if re.match(r'^[a-zA-Z][\.\)]\s', line):
-        return True
-    # Roman numerals in parens: (i), (ii), (iii), (iv), (v), (vi), etc.
-    m = re.match(r'^\(([ivxlcdm]+)\)\s', line, re.IGNORECASE)
-    if m and _is_valid_roman(m.group(1)):
-        return True
-    # Bare roman with 2+ chars: ii. / iii) / iv.  (avoids ambiguity with single letters)
-    m = re.match(r'^([ivxlcdm]{2,})[\.\)]\s', line, re.IGNORECASE)
-    if m and _is_valid_roman(m.group(1)):
-        return True
-    # Single roman i/v/x with period/paren — ambiguous, treat as list item
-    # (single 'i.' could be alphabetical, but in list context it usually is roman)
-    if re.match(r'^[ivxIVX][\.\)]\s', line):
-        return True
-    # Section/Article/Part/Chapter/Item/Note/Step/Appendix/References prefixes
-    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References)\b', line, re.IGNORECASE):
-        return True
-    return False
-
-
 def _unescape_markdown(text: str) -> str:
     """Remove MinerU's markdown escaping for characters we render as HTML.
 
@@ -549,26 +507,24 @@ def _unescape_markdown(text: str) -> str:
     return text.replace('\\*', '*').replace('\\`', '`').replace('\\~', '~')
 
 
-def _detect_list_content(text: str) -> bool:
-    """Check if a text block's content is predominantly list items.
-
-    Returns True if the block should be converted to a 'list' type.
-    """
-    lines = [l.strip() for l in text.split('\n') if l.strip()]
-    if len(lines) < 2:
-        return False
-    list_count = sum(1 for l in lines if _is_list_item(l))
-    # If at least 60% of lines are list items, treat as list block
-    return list_count / len(lines) >= 0.6
+def _has_inline_equations(block: dict) -> bool:
+    """Check if a block contains any equation spans."""
+    for line in block.get('lines', []):
+        for span in line.get('spans', []):
+            if span.get('type') in (ContentType.InlineEquation, ContentType.InterlineEquation):
+                return True
+    return False
 
 
 def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str, list]:
-    """Extract content from a para_block, preserving line breaks.
+    """Extract content from a para_block.
 
-    Uses line-aware joining instead of MinerU's merge_para_with_text (which
-    joins all lines with spaces, destroying list/MCQ/sub-question structure).
-    Lines within a block are joined with \\n so downstream consumers (list
-    detection, true-copy renderer) can preserve the original line structure.
+    For blocks WITHOUT equations: delegates to MinerU's merge_para_with_text()
+    for language-aware joining, dehyphenation, CJK spacing, and list breaks.
+
+    For blocks WITH equations: uses _join_lines_for_html() to produce
+    {{EQ:index}} placeholders with base64 image data (merge_para_with_text
+    wraps equations in $...$ which doesn't carry image data).
 
     Returns: (text, table_html, img_path, latex, inline_equations)
     """
@@ -597,9 +553,15 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
         elif span.get('latex'):
             latex = span['latex']
 
-    # Extract text preserving line structure
+    # Extract text: use MinerU native for non-equation blocks, custom for equations
     if block_type in ('text', 'title', 'list', 'index') and block.get('lines'):
-        text, inline_equations = _join_lines_preserving_breaks(block, img_dir)
+        if _has_inline_equations(block):
+            # Equation blocks need {{EQ:index}} placeholders with image data
+            text, inline_equations = _join_lines_for_html(block, img_dir)
+        else:
+            # Non-equation blocks: delegate entirely to MinerU's native joiner
+            from magic_pdf.dict2md.ocr_mkcontent import merge_para_with_text
+            text = _unescape_markdown(merge_para_with_text(block))
     elif block.get('text'):
         text = block['text']
     else:
@@ -610,16 +572,16 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
     return text, table_html, img_path, latex, inline_equations
 
 
-def _join_lines_preserving_breaks(block: dict, img_dir: str = '') -> tuple[str, list]:
-    """Join block lines using MinerU's native line-break decisions.
+def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
+    """Join block lines for HTML rendering, handling equation placeholders.
 
-    MinerU's paragraph splitting pipeline tags lines with `is_list_start_line`
-    when they should start on a new line (list items, numbered sections, etc.).
-    We respect those tags instead of reimplementing line-break detection.
+    Only used for blocks containing inline/interline equation spans.
+    Non-equation blocks use MinerU's merge_para_with_text() directly.
 
-    For lines without the tag, we use MinerU's joining convention:
-    - Western text: join with space (paragraph flow)
-    - Dehyphenation: remove trailing hyphen when next line starts lowercase
+    This function follows MinerU's joining conventions (is_list_start_line
+    tags, dehyphenation) but replaces equation spans with {{EQ:index}}
+    placeholders carrying base64 image data, which merge_para_with_text()
+    cannot do (it wraps equations in $...$ markdown delimiters).
 
     Returns: (text, inline_equations) where inline_equations is a list of
     dicts with {latex, img_data, img_mime, display} for each embedded equation.
