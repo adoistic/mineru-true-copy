@@ -307,6 +307,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # classified as text by MinerU → crop as image instead
                 if (block_type == 'text'
                         and config.get('figure_display') == 'image'
+                        and page_idx < len(_fitz_doc)
                         and _is_decorative_block(b, text, width)):
                     crop = _crop_and_embed(bbox, page_idx, _fitz_doc[page_idx],
                                            img_dir, _pdf_md5, 'sidebar')
@@ -349,7 +350,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # Fallback crop: figure/image blocks without img_data — crop from PDF
                 if (block_type in ('image', 'image_body', 'figure')
                         and 'img_data' not in block
-                        and config.get('figure_display') == 'image'):
+                        and config.get('figure_display') == 'image'
+                        and page_idx < len(_fitz_doc)):
                     crop = _crop_and_embed(bbox, page_idx, _fitz_doc[page_idx],
                                            img_dir, _pdf_md5, 'figure_crop')
                     if crop:
@@ -397,9 +399,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
               f'{len(pages)} pages, {total_blocks} blocks')
 
     except Exception as e:
-        traceback.print_exc()
+        tb_str = traceback.format_exc()
+        print(tb_str)
         tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['error'] = str(e)
+        # Include traceback location in the error for client-side debugging
+        tb_lines = tb_str.strip().split('\n')
+        location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
+        tasks[task_id]['error'] = f'{e} | at: {location}'
         print(f'[MinerU Server] Task {task_id} failed: {e}')
     finally:
         _parse_semaphore.release()
@@ -469,6 +475,8 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
 
     try:
         for pi, db, text in all_discarded:
+            if pi >= len(pages):
+                continue
             db_bbox = db.get('bbox', [0, 0, 0, 0])
             page_h = pages[pi]['page_size']['height']
             is_top_half = db_bbox[1] < page_h * 0.5
@@ -544,6 +552,8 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
 
     # Extend and sort once per page
     for pi, new_blocks in recovered_per_page.items():
+        if pi >= len(pages):
+            continue
         page_blocks = pages[pi]['preproc_blocks']
         page_blocks.extend(new_blocks)
         page_blocks.sort(key=lambda b: b.get('bbox', [0, 0, 0, 0])[1])
@@ -790,12 +800,12 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
                 result += ' ' + lt_stripped
 
     # Post-process: split bibliography/endnote entries that OCR merged into
-    # one line. Pattern: multiple [N] markers in a single line of text.
+    # one line. Pattern: multiple [N] or (N) markers in a single line of text.
     import re
-    bracket_refs = re.findall(r'\[\d+\]', result)
+    bracket_refs = re.findall(r'(?:\[\d+\]|\(\d+\))', result)
     if len(bracket_refs) >= 3 and '\n' not in result:
-        # Split at [N] boundaries, keeping the marker with its text
-        parts = re.split(r'(?=\[\d+\]\s)', result)
+        # Split at [N] or (N) boundaries, keeping the marker with its text
+        parts = re.split(r'(?=(?:\[\d+\]|\(\d+\))\s)', result)
         result = '\n'.join(p.strip() for p in parts if p.strip())
 
     return result, inline_equations
