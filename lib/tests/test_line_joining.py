@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from mineru_server import (
     _unescape_markdown, _extract_block_content, _assign_heading_levels,
     _is_list_item, _detect_list_content, _is_decorative_sidebar,
+    _is_decorative_block,
 )
 from magic_pdf.config.ocr_content_type import ContentType
 
@@ -397,16 +398,74 @@ class TestDecorativeSidebar:
         # width=150, height=650 — tall but not narrow enough
         assert not _is_decorative_sidebar(block)
 
-    def test_bbox_fs_key(self):
-        """MinerU para_blocks use bbox_fs instead of bbox after para_split."""
-        block = {'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
-        assert _is_decorative_sidebar(block)
+    def test_uses_bbox_not_bbox_fs(self):
+        """Uses layout-detected bbox, not text-fitted bbox_fs.
 
-    def test_bbox_fs_preferred_over_bbox(self):
-        """bbox_fs should take precedence over bbox when both exist."""
+        bbox_fs is only available on text blocks and is too tight for
+        image cropping. cut_image() needs the original layout bbox.
+        """
+        # bbox is wide (not decorative), bbox_fs is narrow — should use bbox
         block = {'bbox': [0, 0, 500, 50], 'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
+        assert not _is_decorative_sidebar(block)
+
+    def test_bbox_only(self):
+        """Works with bbox when bbox_fs is absent (image blocks)."""
+        block = {'bbox': [15, 209, 37, 585], 'type': 'text'}
         assert _is_decorative_sidebar(block)
 
     def test_missing_bbox(self):
         block = {'type': 'text'}
         assert not _is_decorative_sidebar(block)
+
+
+class TestDecorativeBlock:
+    """Tests for unified decorative block detection."""
+
+    def test_narrow_vertical_strip(self):
+        """Catches arXiv ID sidebars, vertical watermarks."""
+        block = {'bbox': [15, 209, 37, 585], 'type': 'text'}
+        assert _is_decorative_block(block, '', 612)
+
+    def test_normal_text_block(self):
+        """Regular paragraph should never be decorative."""
+        block = {'bbox': [72, 100, 540, 130], 'type': 'text'}
+        assert not _is_decorative_block(block, 'This is normal text content.', 612)
+
+    def test_small_block_short_text(self):
+        """Small block with short text: likely icon/logo."""
+        block = {'bbox': [500, 50, 570, 100], 'type': 'text'}
+        # width=70 (11% of 612), height=50, text="©"
+        assert _is_decorative_block(block, '©', 612)
+
+    def test_small_block_with_real_text(self):
+        """Small block but with enough text to be real content."""
+        block = {'bbox': [500, 50, 570, 100], 'type': 'text'}
+        assert not _is_decorative_block(block, 'Section 3.2: Results', 612)
+
+    def test_watermark_short_text(self):
+        """Very short text (1-3 chars) in small area = stamp/watermark."""
+        block = {'bbox': [100, 100, 140, 130], 'type': 'text'}
+        assert _is_decorative_block(block, 'OK', 612)
+
+    def test_empty_text_not_decorative(self):
+        """Empty text blocks are handled elsewhere, not here."""
+        block = {'bbox': [100, 100, 140, 130], 'type': 'text'}
+        assert not _is_decorative_block(block, '', 612)
+
+    def test_wide_block_never_decorative(self):
+        """Full-width blocks should never be decorative."""
+        block = {'bbox': [72, 100, 540, 130], 'type': 'text'}
+        assert not _is_decorative_block(block, 'X', 612)
+
+    def test_ocr_watermark_text_caught(self):
+        """Decorative watermark where MinerU OCR'd a few words.
+        Previously missed by len(text) <= 5 heuristic.
+        """
+        # Small block, short watermark text
+        block = {'bbox': [520, 700, 590, 730], 'type': 'text'}
+        assert _is_decorative_block(block, 'DRAFT', 612)
+
+    def test_uses_bbox_not_bbox_fs(self):
+        """Uses layout bbox, not text-fitted bbox_fs."""
+        block = {'bbox': [0, 0, 500, 50], 'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
+        assert not _is_decorative_block(block, 'real content here', 612)

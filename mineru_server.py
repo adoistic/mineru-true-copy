@@ -55,6 +55,40 @@ from magic_pdf.libs.pdf_image_tools import cut_image
 from magic_pdf.libs.commons import join_path
 from magic_pdf.config.ocr_content_type import ContentType
 
+import base64
+import hashlib
+import fitz  # PyMuPDF
+
+
+def _crop_and_embed(bbox, page_idx, fitz_page, img_dir: str, pdf_md5: str,
+                    label: str = 'crop') -> dict | None:
+    """Crop a region from a PDF page and return base64-embedded image data.
+
+    Returns dict with {img_path, img_data, img_mime} or None on failure.
+    Centralises the cut_image → read file → base64 encode pattern.
+    """
+    try:
+        return_path = join_path(pdf_md5, label)
+        img_path = cut_image(
+            bbox, page_idx, fitz_page,
+            return_path=return_path,
+            imageWriter=FileBasedDataWriter(img_dir),
+        )
+        img_full_path = os.path.join(img_dir, img_path)
+        if os.path.exists(img_full_path):
+            with open(img_full_path, 'rb') as f:
+                img_data = base64.b64encode(f.read()).decode('ascii')
+            ext = os.path.splitext(img_path)[1].lower()
+            img_mime = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
+            return {'img_path': img_path, 'img_data': img_data, 'img_mime': img_mime}
+        else:
+            print(f'[MinerU Server] WARNING: Cropped image not found: {img_full_path}')
+            return None
+    except Exception as e:
+        print(f'[MinerU Server] Failed to crop {label} on page {page_idx}: {e}')
+        return None
+
+
 # Task store (in-memory) with LRU eviction
 MAX_TASKS = 3
 tasks: dict[str, dict] = {}
@@ -101,8 +135,6 @@ def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     This patches in crops for interline and inline equations so they get
     image_path set, just like images and tables do.
     """
-    import fitz
-    import hashlib
 
     pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
 
@@ -224,6 +256,10 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # img_dir is where MinerU wrote extracted images
         _current_img_dir = img_dir
 
+        # Open PDF once for all cropping operations in Step 3
+        _fitz_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        _pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
+
         pages = []
         for page in pdf_info_raw:
             page_idx = page.get('page_idx', 0)
@@ -251,7 +287,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             blocks = []
             for b in para_blocks:
                 block_type = b.get('type', 'text')
-                bbox = b.get('bbox_fs', b.get('bbox', [0, 0, 0, 0]))
+                bbox = b.get('bbox', [0, 0, 0, 0])
 
                 # Debug: log image/figure blocks
                 if block_type in ('image', 'image_body', 'figure'):
@@ -267,33 +303,19 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 if block_type == 'text' and text and _detect_list_content(text):
                     block_type = 'list'
 
-                # Decorative sidebar detection: narrow vertical strips (arXiv IDs,
-                # watermarks) classified as text by MinerU → crop as image
+                # Decorative block detection: narrow strips, small icons, watermarks
+                # classified as text by MinerU → crop as image instead
                 if (block_type == 'text'
                         and config.get('figure_display') == 'image'
-                        and _is_decorative_sidebar(b)):
-                    block_type = 'image'
-                    try:
-                        import fitz
-                        import base64
-                        import hashlib
-                        from magic_pdf.libs.commons import join_path
-                        doc = fitz.open(stream=pdf_bytes, filetype='pdf')
-                        pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
-                        return_path = join_path(pdf_md5, 'sidebar')
-                        sidebar_img_path = cut_image(
-                            bbox, page_idx, doc[page_idx],
-                            return_path=return_path,
-                            imageWriter=FileBasedDataWriter(img_dir),
-                        )
-                        doc.close()
-                        img_path = sidebar_img_path
-                        text = ''  # No text content for image blocks
+                        and _is_decorative_block(b, text, width)):
+                    crop = _crop_and_embed(bbox, page_idx, _fitz_doc[page_idx],
+                                           img_dir, _pdf_md5, 'sidebar')
+                    if crop:
+                        block_type = 'image'
+                        img_path = crop['img_path']
+                        text = ''
                         print(f'[MinerU Server] Page {page_idx}: sidebar→image '
                               f'bbox={[round(x, 1) for x in bbox]}')
-                    except Exception as e:
-                        print(f'[MinerU Server] Failed to crop sidebar on page {page_idx}: {e}')
-                        block_type = 'text'  # Fall back to text if crop fails
 
                 block = {
                     'type': block_type,
@@ -317,7 +339,6 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                     # Embed image as base64 for client rendering
                     img_full_path = os.path.join(img_dir, img_path)
                     if os.path.exists(img_full_path):
-                        import base64
                         with open(img_full_path, 'rb') as f:
                             block['img_data'] = base64.b64encode(f.read()).decode('ascii')
                         ext = os.path.splitext(img_path)[1].lower()
@@ -328,32 +349,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # Fallback crop: figure/image blocks without img_data — crop from PDF
                 if (block_type in ('image', 'image_body', 'figure')
                         and 'img_data' not in block
-                        and config.get('figure_display') == 'image'
-                        and pdf_bytes):
-                    try:
-                        import fitz as _fitz
-                        import base64
-                        import hashlib
-                        from magic_pdf.libs.commons import join_path
-                        _doc = _fitz.open(stream=pdf_bytes, filetype='pdf')
-                        _pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
-                        crop_path = cut_image(
-                            bbox, page_idx, _doc[page_idx],
-                            return_path=join_path(_pdf_md5, 'figure_crop'),
-                            imageWriter=FileBasedDataWriter(img_dir),
-                        )
-                        _doc.close()
-                        img_full = os.path.join(img_dir, crop_path)
-                        if os.path.exists(img_full):
-                            with open(img_full, 'rb') as f:
-                                block['img_data'] = base64.b64encode(f.read()).decode('ascii')
-                            ext = os.path.splitext(crop_path)[1].lower()
-                            block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
-                            block['img_path'] = crop_path
-                            print(f'[MinerU Server] Page {page_idx}: fallback crop for {block_type} '
-                                  f'bbox={[round(x, 1) for x in bbox]}')
-                    except Exception as e:
-                        print(f'[MinerU Server] Failed to fallback-crop {block_type} on page {page_idx}: {e}')
+                        and config.get('figure_display') == 'image'):
+                    crop = _crop_and_embed(bbox, page_idx, _fitz_doc[page_idx],
+                                           img_dir, _pdf_md5, 'figure_crop')
+                    if crop:
+                        block.update(crop)
+                        print(f'[MinerU Server] Page {page_idx}: fallback crop for {block_type} '
+                              f'bbox={[round(x, 1) for x in bbox]}')
 
                 blocks.append(block)
 
@@ -374,6 +376,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # discarded block across all pages, count how many pages each
         # normalised text appears on, and only keep text that is unique.
         _recover_discarded_blocks(pdf_info_raw, pages, img_dir, pdf_bytes, config)
+
+        _fitz_doc.close()
 
         result = {
             'pdf_info': pages,
@@ -455,10 +459,11 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
 
     # Open PDF for image cropping if needed
     fitz_doc = None
+    discard_pdf_md5 = None
     if pdf_bytes and include_figures and figure_display == 'image':
         try:
-            import fitz
             fitz_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+            discard_pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
         except Exception as e:
             print(f'[MinerU Server] Could not open PDF for discarded block cropping: {e}')
 
@@ -490,10 +495,9 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                       f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
                 continue
 
-            # Heuristic: blocks with very short text (<=5 chars) or no text
-            # are likely decorative items (QR codes, logos, icons, line art).
-            # Blocks with real text content (>5 chars) are recovered as text.
-            is_decorative = len(text) <= 5
+            # Use unified decorative detection
+            page_w = pages[pi]['page_size']['width'] if pi < len(pages) else 612
+            is_decorative = _is_decorative_block(db, text, page_w)
 
             if is_decorative:
                 if not include_figures:
@@ -502,33 +506,15 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                     continue
 
                 if figure_display == 'image' and fitz_doc and pi < len(fitz_doc):
-                    # Crop image from PDF
                     block = {
                         'type': 'image',
                         'bbox': db_bbox,
                         'text': text,
                     }
-                    try:
-                        import base64
-                        import hashlib
-                        pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
-                        from magic_pdf.libs.commons import join_path
-                        return_path = join_path(pdf_md5, 'discarded')
-                        img_path = cut_image(
-                            db_bbox, pi, fitz_doc[pi],
-                            return_path=return_path,
-                            imageWriter=FileBasedDataWriter(img_dir),
-                        )
-                        block['img_path'] = img_path
-                        # Embed as base64
-                        img_full_path = os.path.join(img_dir, img_path)
-                        if os.path.exists(img_full_path):
-                            with open(img_full_path, 'rb') as f:
-                                block['img_data'] = base64.b64encode(f.read()).decode('ascii')
-                            ext = os.path.splitext(img_path)[1].lower()
-                            block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
-                    except Exception as crop_err:
-                        print(f'[MinerU Server] Failed to crop decorative block on page {pi}: {crop_err}')
+                    crop = _crop_and_embed(db_bbox, pi, fitz_doc[pi],
+                                           img_dir, discard_pdf_md5, 'discarded')
+                    if crop:
+                        block.update(crop)
                     recovered_per_page[pi].append(block)
                     print(f'[MinerU Server] Page {pi}: decorative→image block '
                           f'bbox={[round(x, 1) for x in db_bbox]}')
@@ -623,20 +609,49 @@ def _detect_list_content(text: str) -> bool:
     return list_count / len(lines) >= 0.6
 
 
-def _is_decorative_sidebar(block: dict) -> bool:
-    """Detect narrow vertical strips that are decorative metadata.
+def _is_decorative_block(block: dict, text: str, page_width: float = 612) -> bool:
+    """Detect blocks that are decorative rather than content.
 
-    ArXiv IDs, watermarks, vertical barcodes — MinerU classifies these as
-    text blocks but they're decorative. Identified by extreme aspect ratio
-    (very tall relative to width) and absolute narrowness.
+    Unified detection covering:
+    1. Narrow vertical strips (arXiv IDs, watermarks, vertical barcodes)
+    2. Small blocks with minimal text (logos, QR codes, icons)
+    3. Blocks with very low text density relative to their area
+
+    Returns True if the block should be treated as a decorative image
+    rather than text content.
     """
-    bbox = block.get('bbox_fs', block.get('bbox', [0, 0, 0, 0]))
+    bbox = block.get('bbox', [0, 0, 0, 0])
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     if width <= 0 or height <= 0:
         return False
+
+    area = width * height
+    text_stripped = text.strip() if text else ''
+    text_len = len(text_stripped)
+
+    # 1. Narrow vertical strips: extreme aspect ratio + narrow
     aspect_ratio = height / width
-    return aspect_ratio > 8 and width < 50
+    if aspect_ratio > 6 and width < 60:
+        return True
+
+    # 2. Small blocks with short text: likely icons, logos, QR codes
+    #    Block is small relative to page AND has very little text (but not empty)
+    is_small = width < page_width * 0.15 and height < 100
+    if is_small and 0 < text_len <= 10:
+        return True
+
+    # 3. Very short text in a small block: watermark text, stamps
+    #    Requires both short text AND small width to avoid false positives
+    if 0 < text_len <= 3 and width < page_width * 0.25 and area < page_width * 50:
+        return True
+
+    return False
+
+
+def _is_decorative_sidebar(block: dict) -> bool:
+    """Legacy wrapper — use _is_decorative_block instead."""
+    return _is_decorative_block(block, '', 612)
 
 
 def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str, list]:
@@ -730,7 +745,6 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
                 # Attach image data if available
                 eq_img_path = span.get('image_path', '')
                 if eq_img_path and img_dir:
-                    import base64
                     full_path = os.path.join(img_dir, eq_img_path)
                     if os.path.exists(full_path):
                         with open(full_path, 'rb') as f:

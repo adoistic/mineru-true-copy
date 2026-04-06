@@ -54,11 +54,11 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
 
-    // Sort regions by reading order (top-to-bottom, left-to-right)
-    // This flattens multi-column layouts into single-column
-    const sorted = sortByReadingOrder(regions);
+    // MinerU's LayoutReader model already outputs para_blocks in correct
+    // reading order (column-aware). Do NOT re-sort by Y coordinate — that
+    // destroys multi-column reading order by interleaving columns.
 
-    for (const region of sorted) {
+    for (const region of regions) {
       const html = regionToHtml(region, { joinWithPrevious: previousPageEndedMidSentence, formulaDisplay, tableDisplay, includeFigures, figureDisplay });
       if (html) {
         htmlParts.push(html);
@@ -67,8 +67,8 @@ export function mineruToHtml(output: MineruOutput, options: HtmlConversionOption
     }
 
     // Check if page ends mid-sentence (for join broken pages)
-    if (options.joinBrokenPages && sorted.length > 0) {
-      const lastRegion = sorted[sorted.length - 1];
+    if (options.joinBrokenPages && regions.length > 0) {
+      const lastRegion = regions[regions.length - 1];
       if (lastRegion.type === 'text') {
         const text = lastRegion.content.trim();
         previousPageEndedMidSentence = !text.match(/[.!?:]\s*$/);
@@ -92,9 +92,8 @@ function mineruToHtmlBody(output: MineruOutput, options: HtmlConversionOptions):
 
   for (const page of pages) {
     const regions = filterRegions(page.regions, options);
-    const sorted = sortByReadingOrder(regions);
 
-    for (const region of sorted) {
+    for (const region of regions) {
       const html = regionToHtml(region, { joinWithPrevious: false, formulaDisplay, tableDisplay, includeFigures, figureDisplay });
       if (html) htmlParts.push(html);
     }
@@ -114,17 +113,6 @@ function filterRegions(regions: MineruRegion[], options: HtmlConversionOptions):
       return false;
     }
     return true;
-  });
-}
-
-function sortByReadingOrder(regions: MineruRegion[]): MineruRegion[] {
-  // Sort by y-position first (top to bottom), then x-position (left to right)
-  // This flattens multi-column layouts into reading order
-  return [...regions].sort((a, b) => {
-    const yThreshold = 20; // Regions within 20px vertically are on the same "line"
-    const yDiff = a.bbox[1] - b.bbox[1];
-    if (Math.abs(yDiff) > yThreshold) return yDiff;
-    return a.bbox[0] - b.bbox[0]; // Same line, sort left to right
   });
 }
 
