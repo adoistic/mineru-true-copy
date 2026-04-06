@@ -4,8 +4,9 @@ import {
   sanitizeTableHtml,
   convertList,
   regionToHtml,
+  mineruToHtml,
 } from '../html-converter';
-import type { MineruRegion } from '@/types';
+import type { MineruRegion, MineruOutput } from '@/types';
 
 function makeRegion(overrides: Partial<MineruRegion> & { content: string; type: MineruRegion['type'] }): MineruRegion {
   return {
@@ -275,5 +276,75 @@ describe('regionToHtml', () => {
     expect(result).toContain('<img src="data:image/png;base64,iVBORw0KGgo="');
     expect(result).toContain('<figure>');
     expect(result).toContain('<figcaption>');
+  });
+
+  it('31s. figure without img_data in image mode returns empty string', () => {
+    const region = makeRegion({
+      type: 'figure',
+      content: 'Missing image',
+    });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'image' });
+    expect(result).toBe('');
+  });
+
+  it('32s. figure without img_data in text mode renders content as text', () => {
+    const region = makeRegion({
+      type: 'figure',
+      content: 'Figure 3: Results',
+    });
+    const result = regionToHtml(region, { joinWithPrevious: false, formulaDisplay: 'rendered', tableDisplay: 'rendered', includeFigures: true, figureDisplay: 'text' });
+    expect(result).toContain('Figure 3: Results');
+    expect(result).toContain('<p>');
+  });
+});
+
+// --- Block ordering regression tests ---
+
+describe('mineruToHtml block ordering', () => {
+  function makeOutput(regions: MineruRegion[]): MineruOutput {
+    return {
+      pages: [{
+        page_number: 1,
+        width: 612,
+        height: 792,
+        regions,
+      }],
+      metadata: { total_pages: 1, file_name: 'test.pdf' },
+    };
+  }
+
+  it('33s. multi-column blocks preserve MinerU order, not Y-sort', () => {
+    // Simulate two-column layout: left column blocks come first in MinerU output,
+    // then right column blocks. Y coordinates overlap between columns.
+    const output = makeOutput([
+      makeRegion({ type: 'text', content: 'Left col paragraph 1', bbox: [72, 100, 300, 130] }),
+      makeRegion({ type: 'text', content: 'Left col paragraph 2', bbox: [72, 140, 300, 170] }),
+      makeRegion({ type: 'text', content: 'Right col paragraph 1', bbox: [320, 100, 540, 130] }),
+      makeRegion({ type: 'text', content: 'Right col paragraph 2', bbox: [320, 140, 540, 170] }),
+    ]);
+    const html = mineruToHtml(output, {});
+    const left1 = html.indexOf('Left col paragraph 1');
+    const left2 = html.indexOf('Left col paragraph 2');
+    const right1 = html.indexOf('Right col paragraph 1');
+    const right2 = html.indexOf('Right col paragraph 2');
+    // Left column must come before right column (MinerU reading order)
+    // A Y-sort would interleave: left1, right1, left2, right2
+    expect(left1).toBeLessThan(left2);
+    expect(left2).toBeLessThan(right1);
+    expect(right1).toBeLessThan(right2);
+  });
+
+  it('34s. single-column blocks stay in document order', () => {
+    const output = makeOutput([
+      makeRegion({ type: 'title', content: 'Chapter 1', bbox: [72, 50, 540, 80] }),
+      makeRegion({ type: 'text', content: 'Introduction text', bbox: [72, 100, 540, 200] }),
+      makeRegion({ type: 'text', content: 'Second paragraph', bbox: [72, 210, 540, 300] }),
+    ]);
+    const html = mineruToHtml(output, {});
+    const title = html.indexOf('Chapter 1');
+    const intro = html.indexOf('Introduction text');
+    const second = html.indexOf('Second paragraph');
+    expect(title).toBeLessThan(intro);
+    expect(intro).toBeLessThan(second);
   });
 });
