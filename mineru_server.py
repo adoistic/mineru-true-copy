@@ -94,6 +94,18 @@ MAX_TASKS = 3
 tasks: dict[str, dict] = {}
 
 
+def _safe_bbox(val) -> list:
+    """Normalize bbox to [x1, y1, x2, y2].
+
+    MinerU sometimes sets bbox to [] (empty list) rather than omitting the key.
+    In that case .get('bbox', [0,0,0,0]) returns [] because the key exists.
+    This helper guarantees a 4-element list, preventing IndexError.
+    """
+    if not val or not isinstance(val, (list, tuple)) or len(val) < 4:
+        return [0, 0, 0, 0]
+    return list(val[:4])
+
+
 def _evict_old_tasks():
     """Evict oldest tasks when over MAX_TASKS limit."""
     while len(tasks) > MAX_TASKS:
@@ -287,7 +299,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             blocks = []
             for b in para_blocks:
                 block_type = b.get('type', 'text')
-                bbox = b.get('bbox', [0, 0, 0, 0])
+                bbox = _safe_bbox(b.get('bbox'))
 
                 # Debug: log image/figure blocks
                 if block_type in ('image', 'image_body', 'figure'):
@@ -477,7 +489,7 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
         for pi, db, text in all_discarded:
             if pi >= len(pages):
                 continue
-            db_bbox = db.get('bbox', [0, 0, 0, 0])
+            db_bbox = _safe_bbox(db.get('bbox'))
             page_h = pages[pi]['page_size']['height']
             is_top_half = db_bbox[1] < page_h * 0.5
 
@@ -556,7 +568,7 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
             continue
         page_blocks = pages[pi]['preproc_blocks']
         page_blocks.extend(new_blocks)
-        page_blocks.sort(key=lambda b: b.get('bbox', [0, 0, 0, 0])[1])
+        page_blocks.sort(key=lambda b: _safe_bbox(b.get('bbox'))[1])
 
 
 def _unescape_markdown(text: str) -> str:
@@ -630,7 +642,7 @@ def _is_decorative_block(block: dict, text: str, page_width: float = 612) -> boo
     Returns True if the block should be treated as a decorative image
     rather than text content.
     """
-    bbox = block.get('bbox', [0, 0, 0, 0])
+    bbox = _safe_bbox(block.get('bbox'))
     width = bbox[2] - bbox[0]
     height = bbox[3] - bbox[1]
     if width <= 0 or height <= 0:
@@ -834,9 +846,7 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
             continue
 
         text = block.get('text', '').strip()
-        bbox = list(block.get('bbox', [0, 0, 0, 0]))
-        if len(bbox) < 4:
-            bbox = [0, 0, 0, 0]
+        bbox = _safe_bbox(block.get('bbox'))
         block_h = bbox[3] - bbox[1]
 
         # Skip non-text blocks, empty blocks, or blocks with enough space
@@ -859,9 +869,7 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
         while j < len(blocks):
             next_block = blocks[j]
             next_text = next_block.get('text', '').strip()
-            next_bbox = next_block.get('bbox', [0, 0, 0, 0])
-            if len(next_bbox) < 4:
-                next_bbox = [0, 0, 0, 0]
+            next_bbox = _safe_bbox(next_block.get('bbox'))
             next_y1 = next_bbox[1]
 
             # Stop if: non-empty block, or large vertical gap (>5px), or different type
@@ -1029,10 +1037,11 @@ def _attach_table_html(blocks: list, tbl_bbox: list, tbl_html: str):
     for i, b in enumerate(blocks):
         if b.get('type') not in ('table', 'text'):
             continue
-        bb = b.get('bbox', [0, 0, 0, 0])
+        bb = _safe_bbox(b.get('bbox'))
+        tbl_bb = _safe_bbox(tbl_bbox)
         # Calculate overlap
-        x_overlap = max(0, min(bb[2], tbl_bbox[2]) - max(bb[0], tbl_bbox[0]))
-        y_overlap = max(0, min(bb[3], tbl_bbox[3]) - max(bb[1], tbl_bbox[1]))
+        x_overlap = max(0, min(bb[2], tbl_bb[2]) - max(bb[0], tbl_bb[0]))
+        y_overlap = max(0, min(bb[3], tbl_bb[3]) - max(bb[1], tbl_bb[1]))
         overlap = x_overlap * y_overlap
         if overlap > best_overlap:
             best_overlap = overlap
