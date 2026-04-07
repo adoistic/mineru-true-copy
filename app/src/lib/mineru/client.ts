@@ -184,6 +184,24 @@ export async function getPageImage(taskId: string, pageIdx: number): Promise<Buf
   return Buffer.from(arrayBuffer);
 }
 
+/**
+ * Signal the server to free heavy resources for a completed task.
+ * Fire-and-forget: auto-cleanup thread is the safety net.
+ */
+export async function deleteTask(taskId: string): Promise<void> {
+  try {
+    const response = await fetch(`${getMineruUrl()}/tasks/${taskId}`, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!response.ok) {
+      console.warn(`[MinerU] DELETE task ${taskId} failed: ${response.status}`);
+    }
+  } catch (err) {
+    console.warn(`[MinerU] DELETE task ${taskId} error:`, err);
+  }
+}
+
 function parseMineruResult(raw: unknown): MineruOutput {
   // MinerU returns a structured JSON with pages and their content blocks
   // This normalizes it into our internal format

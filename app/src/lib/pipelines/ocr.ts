@@ -4,7 +4,7 @@
  */
 import { Job, PipelineProgress, ProcessingOptions } from '@/types';
 import { Pipeline, PipelineResult } from './types';
-import { submitFile, pollForCompletion } from '@/lib/mineru/client';
+import { submitFile, pollForCompletion, deleteTask } from '@/lib/mineru/client';
 import { exportAll } from '@/lib/export';
 import fs from 'fs';
 import path from 'path';
@@ -86,6 +86,9 @@ export class OcrPipeline implements Pipeline {
     // Save raw OCR data JSON for reference
     const jsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
     fs.writeFileSync(jsonPath, JSON.stringify(mineruOutput, null, 2));
+
+    // Cleanup: signal server to free heavy resources (PDF bytes, pipe_result, img_dir)
+    await deleteTask(taskId);
 
     return {
       success: true,

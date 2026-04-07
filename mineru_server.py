@@ -106,19 +106,61 @@ def _safe_bbox(val) -> list:
     return list(val[:4])
 
 
+def _cleanup_task(task_id: str, *, remove_from_store: bool = False):
+    """Free heavy resources for a task, keeping lightweight metadata.
+
+    Called by DELETE endpoint (client-triggered) and auto-cleanup thread.
+    Frees _pdf_bytes, _pipe_result, result, and _img_dir on disk.
+    """
+    task = tasks.get(task_id)
+    if not task or task.get('_cleaned'):
+        return
+
+    freed = []
+
+    if '_pdf_bytes' in task:
+        del task['_pdf_bytes']
+        freed.append('pdf_bytes')
+
+    if '_pipe_result' in task:
+        del task['_pipe_result']
+        freed.append('pipe_result')
+
+    if 'result' in task and task['result'] is not None:
+        del task['result']
+        freed.append('result')
+
+    img_dir = task.pop('_img_dir', None)
+    if img_dir:
+        import shutil
+        try:
+            shutil.rmtree(img_dir, ignore_errors=True)
+            freed.append('img_dir')
+        except Exception:
+            pass
+
+    task['_cleaned'] = True
+    task['_cleaned_at'] = time.time()
+
+    if remove_from_store:
+        tasks.pop(task_id, None)
+
+    if freed:
+        import gc
+        gc.collect()
+        try:
+            import psutil
+            rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
+            print(f'[MinerU Server] Cleaned task {task_id}: freed {freed}, RSS={rss_mb:.0f}MB')
+        except ImportError:
+            print(f'[MinerU Server] Cleaned task {task_id}: freed {freed}')
+
+
 def _evict_old_tasks():
     """Evict oldest tasks when over MAX_TASKS limit."""
     while len(tasks) > MAX_TASKS:
         oldest_id = next(iter(tasks))
-        old_task = tasks.pop(oldest_id)
-        # Clean up temp directory if it exists
-        img_dir = old_task.get('_img_dir')
-        if img_dir:
-            import shutil
-            try:
-                shutil.rmtree(img_dir, ignore_errors=True)
-            except Exception:
-                pass
+        _cleanup_task(oldest_id, remove_from_store=True)
         print(f'[MinerU Server] Evicted task {oldest_id} ({len(tasks)} remaining)')
 
 # Dynamic concurrency based on system memory
@@ -399,6 +441,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         }
 
         tasks[task_id]['status'] = 'completed'
+        tasks[task_id]['_completed_at'] = time.time()
         tasks[task_id]['result'] = result
         # Store pipe_result for native export methods (content_list, markdown)
         tasks[task_id]['_pipe_result'] = pipe_result
@@ -414,12 +457,18 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         tb_str = traceback.format_exc()
         print(tb_str)
         tasks[task_id]['status'] = 'failed'
+        tasks[task_id]['_completed_at'] = time.time()
         # Include traceback location in the error for client-side debugging
         tb_lines = tb_str.strip().split('\n')
         location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
         tasks[task_id]['error'] = f'{e} | at: {location}'
         print(f'[MinerU Server] Task {task_id} failed: {e}')
     finally:
+        # Ensure fitz doc is closed even on error (may already be closed on success path)
+        try:
+            _fitz_doc.close()
+        except Exception:
+            pass
         _parse_semaphore.release()
 
 
@@ -1100,7 +1149,29 @@ class MineruHandler(BaseHTTPRequestHandler):
 
             # Return task without internal Python objects
             safe_task = {k: v for k, v in task.items() if not k.startswith('_')}
+            if task.get('_cleaned'):
+                safe_task['cleaned'] = True
             self._send_json(200, safe_task)
+            return
+
+        self._send_json(404, {'error': 'Not found'})
+
+    def do_DELETE(self):
+        parsed = urlparse(self.path)
+
+        # DELETE /tasks/{task_id} — free heavy resources after exports
+        if parsed.path.startswith('/tasks/'):
+            path_parts = parsed.path.strip('/').split('/')
+            task_id = path_parts[1] if len(path_parts) >= 2 else ''
+            task = tasks.get(task_id)
+            if not task:
+                self._send_json(404, {'error': 'Task not found'})
+                return
+            if task.get('status') == 'processing':
+                self._send_json(409, {'error': 'Task still processing'})
+                return
+            _cleanup_task(task_id)
+            self._send_json(200, {'task_id': task_id, 'cleaned': True})
             return
 
         self._send_json(404, {'error': 'Not found'})
@@ -1353,6 +1424,31 @@ def _write_magic_pdf_config(models_dir: str):
     print(f'[MinerU Server] Wrote config to {config_path} (models-dir: {models_dir})')
 
 
+def _auto_cleanup_loop():
+    """Background thread: clean up stale completed/failed tasks every 60s."""
+    CLEANUP_INTERVAL = 60
+    STALE_AGE_SECONDS = 600  # 10 minutes
+
+    while True:
+        time.sleep(CLEANUP_INTERVAL)
+        try:
+            now = time.time()
+            for task_id, task in list(tasks.items()):
+                if task.get('_cleaned'):
+                    continue
+                status = task.get('status')
+                if status not in ('completed', 'failed'):
+                    continue
+                completed_at = task.get('_completed_at', 0)
+                if completed_at and (now - completed_at) > STALE_AGE_SECONDS:
+                    print(f'[MinerU Server] Auto-cleaning stale task {task_id} '
+                          f'(status={status}, age={now - completed_at:.0f}s)')
+                    _cleanup_task(task_id)
+            _evict_old_tasks()
+        except Exception as e:
+            print(f'[MinerU Server] Auto-cleanup error: {e}')
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MinerU REST API server')
     parser.add_argument('--port', type=int, default=int(os.environ.get('MINERU_PORT', '8765')),
@@ -1379,6 +1475,10 @@ if __name__ == '__main__':
         _pre_warm_models()
     else:
         _server_status = 'ok'
+
+    # Start auto-cleanup background thread
+    cleanup_thread = threading.Thread(target=_auto_cleanup_loop, daemon=True)
+    cleanup_thread.start()
 
     print(f'[MinerU Server] Ready')
 
