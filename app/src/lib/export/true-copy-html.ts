@@ -255,7 +255,60 @@ function getFitScript(): string {
   return `(function() {
   var LINE_HEIGHT_RATIO = 1.2;
   var FONT_FAMILY = '"Inter", sans-serif';
+  var FLOOR = 1;
   var regions = document.querySelectorAll('[data-fit="true"]');
+
+  // Measure the text at a given font size. Returns measured height in px.
+  function measureAt(rawText, size, boxWidth, isBold, opts) {
+    var font = (isBold ? '600 ' : '') + size + 'px ' + FONT_FAMILY;
+    var lineH = Math.round(size * LINE_HEIGHT_RATIO);
+    if (lineH < 1) lineH = 1;
+    var prepared = Pretext.prepare(rawText, font, opts);
+    var result = Pretext.layout(prepared, boxWidth, lineH);
+    return result.height;
+  }
+
+  // Discover dynamic [lo, hi] bounds for the binary search by probing a
+  // ladder of candidate sizes derived from the box height. Binary search
+  // invariant: lo = largest known-fitting size, hi = smallest known-NOT-fitting
+  // size. So the first candidate that fits in the descending ladder becomes
+  // lo, and the previous (larger, failed) candidate becomes hi.
+  // Falls back to FLOOR if even the smallest candidate doesn't fit.
+  function findFontBounds(rawText, boxWidth, boxHeight, isBold, opts) {
+    // Descending ladder relative to boxHeight. Always anchored at FLOOR.
+    var ladder = [
+      boxHeight * 4,
+      boxHeight * 2,
+      boxHeight,
+      boxHeight / 2,
+      boxHeight / 4,
+      FLOOR
+    ];
+    // Sanitize: strictly descending, anchored at FLOOR.
+    var clean = [];
+    for (var k = 0; k < ladder.length; k++) {
+      var v = ladder[k];
+      if (!isFinite(v) || v <= 0) continue;
+      if (v < FLOOR) v = FLOOR;
+      if (clean.length === 0 || v < clean[clean.length - 1]) clean.push(v);
+    }
+    if (clean.length === 0) clean.push(FLOOR);
+    if (clean[clean.length - 1] > FLOOR) clean.push(FLOOR);
+
+    var prevFailed = null; // last (larger) candidate that overflowed
+    for (var j = 0; j < clean.length; j++) {
+      var size = clean[j];
+      var h = measureAt(rawText, size, boxWidth, isBold, opts);
+      if (h <= boxHeight) {
+        // Found a fitting size: lo = this size, hi = last failed (or this size if none failed).
+        var hi = prevFailed !== null ? prevFailed : size;
+        return { lo: size, hi: hi };
+      }
+      prevFailed = size;
+    }
+    // Even FLOOR overflows — clamp to FLOOR.
+    return { lo: FLOOR, hi: FLOOR };
+  }
 
   for (var i = 0; i < regions.length; i++) {
     var el = regions[i];
@@ -266,28 +319,28 @@ function getFitScript(): string {
     var rawText = el.getAttribute('data-raw-text') || '';
     if (!rawText) continue;
 
-    // Binary search: largest font size where pretext says text fits the box
     var isBold = el.hasAttribute('data-bold');
-    var lo = 5;
-    var hi = Math.min(boxHeight, 72);
+    var opts = el.hasAttribute('data-prewrap') ? { whiteSpace: 'pre-wrap' } : undefined;
+
+    // Phase 1: probe ladder to discover dynamic [lo, hi] bounds.
+    var bounds = findFontBounds(rawText, boxWidth, boxHeight, isBold, opts);
+    var lo = bounds.lo;
+    var hi = bounds.hi;
     var bestSize = lo;
 
+    // Phase 2: binary search within the discovered window.
     for (var iter = 0; iter < 20; iter++) {
+      if (hi - lo < 0.5) break;
       var mid = (lo + hi) / 2;
-      var font = (isBold ? '600 ' : '') + mid + 'px ' + FONT_FAMILY;
-      var lineH = Math.round(mid * LINE_HEIGHT_RATIO);
-      var opts = el.hasAttribute('data-prewrap') ? { whiteSpace: 'pre-wrap' } : undefined;
-      var prepared = Pretext.prepare(rawText, font, opts);
-      var result = Pretext.layout(prepared, boxWidth, lineH);
-
-      if (result.height <= boxHeight) {
+      var measuredHeight = measureAt(rawText, mid, boxWidth, isBold, opts);
+      if (measuredHeight <= boxHeight) {
         bestSize = mid;
         lo = mid;
       } else {
         hi = mid;
       }
-      if (hi - lo < 0.5) break;
     }
+    if (bestSize < FLOOR) bestSize = FLOOR;
 
     el.style.fontSize = bestSize.toFixed(1) + 'px';
     el.style.lineHeight = Math.round(bestSize * LINE_HEIGHT_RATIO) + 'px';
