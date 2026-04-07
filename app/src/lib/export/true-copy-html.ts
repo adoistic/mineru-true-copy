@@ -429,26 +429,71 @@ function getFitScript(): string {
   }
 
   // Second pass: fit tables using DOM scrollHeight (Pretext can't measure HTML tables)
+  // Probe a descending ladder of candidate font sizes to discover the actual
+  // fitting band (rather than assuming a hardcoded [4, 14] cap), then binary
+  // search inside that narrow band.
+  function findTableFontBounds(tel, tBoxH) {
+    var ladder = [Math.min(tBoxH, 48), 24, 16, 12, 8, 6, 4, 2, 1];
+    // Deduplicate and ensure descending order (the first entry can collide
+    // with another value when tBoxH is small).
+    var seen = {};
+    var probes = [];
+    for (var i = 0; i < ladder.length; i++) {
+      var v = ladder[i];
+      if (v <= 0) continue;
+      var key = v.toFixed(3);
+      if (seen[key]) continue;
+      seen[key] = true;
+      probes.push(v);
+    }
+    probes.sort(function(a, b) { return b - a; });
+
+    var hiFailed = null;
+    var loFit = null;
+    for (var p = 0; p < probes.length; p++) {
+      var candidate = probes[p];
+      tel.style.fontSize = candidate + 'px';
+      if (tel.scrollHeight <= tBoxH) {
+        loFit = candidate;
+        break;
+      }
+      hiFailed = candidate;
+    }
+
+    if (loFit === null) {
+      // Even 1px overflows. Accept 1px and let overflow:hidden clip.
+      return { lo: 1, hi: 1 };
+    }
+    if (hiFailed === null) {
+      // Largest probe already fit; nothing larger to search toward.
+      return { lo: loFit, hi: loFit };
+    }
+    return { lo: loFit, hi: hiFailed };
+  }
+
   var tables = document.querySelectorAll('[data-fit-table="true"]');
   for (var t = 0; t < tables.length; t++) {
     var tel = tables[t];
     var tBoxH = parseFloat(tel.style.height);
     if (!tBoxH) continue;
 
-    var tlo = 4;
-    var thi = Math.min(tBoxH / 2, 14);
+    var bounds = findTableFontBounds(tel, tBoxH);
+    var tlo = bounds.lo;
+    var thi = bounds.hi;
     var tBest = tlo;
 
-    for (var titer = 0; titer < 20; titer++) {
-      var tmid = (tlo + thi) / 2;
-      tel.style.fontSize = tmid + 'px';
-      if (tel.scrollHeight <= tBoxH) {
-        tBest = tmid;
-        tlo = tmid;
-      } else {
-        thi = tmid;
+    if (thi > tlo) {
+      for (var titer = 0; titer < 20; titer++) {
+        var tmid = (tlo + thi) / 2;
+        tel.style.fontSize = tmid + 'px';
+        if (tel.scrollHeight <= tBoxH) {
+          tBest = tmid;
+          tlo = tmid;
+        } else {
+          thi = tmid;
+        }
+        if (thi - tlo < 0.25) break;
       }
-      if (thi - tlo < 0.25) break;
     }
 
     tel.style.fontSize = tBest.toFixed(1) + 'px';
