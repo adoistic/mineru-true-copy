@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 from mineru_server import (
     _unescape_markdown, _extract_block_content, _assign_heading_levels,
     _is_list_item, _detect_list_content, _is_decorative_sidebar,
-    _is_decorative_block,
+    _is_decorative_block, _merge_overlapping_blocks,
 )
 from magic_pdf.config.ocr_content_type import ContentType
 
@@ -500,3 +500,55 @@ class TestDecorativeBlock:
         """Uses layout bbox, not text-fitted bbox_fs."""
         block = {'bbox': [0, 0, 500, 50], 'bbox_fs': [15, 209, 37, 585], 'type': 'text'}
         assert not _is_decorative_block(block, 'real content here', 612)
+
+
+class TestMergeOverlappingBlocks:
+    """Tests for _merge_overlapping_blocks: dedup of stacked text regions."""
+
+    def test_overlapping_text_blocks_get_merged(self):
+        """Doc 3 p44 case: short text r2 sits inside long body r3."""
+        small = {
+            'type': 'text',
+            'bbox': [70, 166, 526, 200],  # 456 x 34
+            'text': 'Header line that is also captured below',
+        }
+        large = {
+            'type': 'list',
+            'bbox': [68, 179, 528, 779],  # 460 x 600
+            'text': 'Item one\nItem two\nItem three',
+        }
+        out = _merge_overlapping_blocks([small, large])
+        assert len(out) == 1
+        merged = out[0]
+        # Larger block's bbox + type win
+        assert merged['bbox'] == [68, 179, 528, 779]
+        assert merged['type'] == 'list'
+        # Smaller text prepended with newline separator
+        assert merged['text'].startswith('Header line that is also captured below')
+        assert 'Item one' in merged['text']
+        assert '\n' in merged['text']
+
+    def test_empty_smaller_block_dropped_without_content_merge(self):
+        """An empty inner block is dropped, larger text untouched."""
+        empty_small = {'type': 'text', 'bbox': [70, 166, 526, 200], 'text': '   '}
+        large = {'type': 'text', 'bbox': [68, 179, 528, 779], 'text': 'Body content'}
+        out = _merge_overlapping_blocks([empty_small, large])
+        assert len(out) == 1
+        assert out[0]['text'] == 'Body content'
+        assert out[0]['bbox'] == [68, 179, 528, 779]
+
+    def test_non_overlapping_text_blocks_are_preserved(self):
+        """Stacked but non-overlapping blocks must NOT be merged."""
+        a = {'type': 'text', 'bbox': [70, 100, 526, 150], 'text': 'first paragraph'}
+        b = {'type': 'text', 'bbox': [70, 200, 526, 400], 'text': 'second paragraph'}
+        out = _merge_overlapping_blocks([a, b])
+        assert len(out) == 2
+        assert out[0]['text'] == 'first paragraph'
+        assert out[1]['text'] == 'second paragraph'
+
+    def test_text_and_table_not_merged(self):
+        """Different fundamental types (text vs table) must not merge."""
+        small = {'type': 'text', 'bbox': [70, 166, 526, 200], 'text': 'caption'}
+        table = {'type': 'table', 'bbox': [68, 179, 528, 779], 'text': 'cell data'}
+        out = _merge_overlapping_blocks([small, table])
+        assert len(out) == 2

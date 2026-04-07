@@ -420,6 +420,12 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             # into one, leaving neighbors empty. Expand the bbox to cover the empties.
             blocks = _merge_overflowed_blocks(blocks)
 
+            # Dedup pass: MinerU sometimes emits two text/list regions whose
+            # bboxes overlap heavily (a short header sitting inside a long body
+            # region). Merge the smaller into the larger to prevent visual
+            # stacking on the rendered page.
+            blocks = _merge_overlapping_blocks(blocks)
+
             pages.append({
                 'page_idx': page_idx,
                 'page_size': {'width': width, 'height': height},
@@ -947,6 +953,71 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
 
     return result
 
+
+# Text-like block types that may legitimately be merged when bboxes overlap.
+_MERGEABLE_TEXT_TYPES = ('text', 'title', 'list')
+
+
+def _merge_overlapping_blocks(blocks: list[dict]) -> list[dict]:
+    """Merge text-like blocks whose bboxes overlap heavily.
+
+    MinerU's layout model occasionally emits two regions for the same chunk
+    of page real-estate (e.g. a short header bbox positioned inside a long
+    body bbox). When two text/title/list blocks overlap by >=60% relative to
+    the smaller block's area, fold the smaller into the larger one. The
+    larger block's bbox and type win; the smaller block's content is
+    prepended to the larger block's text with a newline separator. Empty
+    smaller blocks are simply dropped.
+    """
+    if len(blocks) < 2:
+        return blocks
+
+    # Precompute bbox + area for each block, marking those eligible for merge.
+    n = len(blocks)
+    info = []
+    for b in blocks:
+        bb = _safe_bbox(b.get('bbox'))
+        area = max(0, bb[2] - bb[0]) * max(0, bb[3] - bb[1])
+        mergeable = b.get('type') in _MERGEABLE_TEXT_TYPES and area > 0
+        info.append((bb, area, mergeable))
+
+    # Work on copies so we can mutate text/bbox without touching originals.
+    out = [dict(b) for b in blocks]
+    dropped = set()
+
+    for i in range(n):
+        if i in dropped or not info[i][2]:
+            continue
+        for j in range(n):
+            if j == i or j in dropped or not info[j][2]:
+                continue
+            bb_i, area_i, _ = info[i]
+            bb_j, area_j, _ = info[j]
+            # i must be the smaller (or equal) block.
+            if area_i > area_j:
+                continue
+            ix1 = max(bb_i[0], bb_j[0])
+            iy1 = max(bb_i[1], bb_j[1])
+            ix2 = min(bb_i[2], bb_j[2])
+            iy2 = min(bb_i[3], bb_j[3])
+            inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+            if inter / area_i < 0.6:
+                continue
+            # Merge i into j.
+            small_text = (out[i].get('text') or '').strip()
+            if small_text:
+                large_text = out[j].get('text') or ''
+                out[j]['text'] = (small_text + '\n' + large_text).strip()
+            print(
+                f'[MinerU Server] Merged overlapping block [{i}] '
+                f'(type={out[i].get("type")}, area={area_i:.0f}) into '
+                f'[{j}] (type={out[j].get("type")}, area={area_j:.0f}); '
+                f'overlap={inter / area_i:.0%}'
+            )
+            dropped.add(i)
+            break
+
+    return [b for k, b in enumerate(out) if k not in dropped]
 
 
 def _assign_heading_levels(pdf_info: list):
