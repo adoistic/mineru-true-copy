@@ -261,3 +261,53 @@ recovery path. Add a watchdog that:
 
 **Depends on:** Sidecar management in main.rs (Phase 4)
 **Blocked by:** Nothing
+
+---
+
+## Reliability TODOs (2026-04-07)
+
+### TODO 17: MinerU Server Cleanup & Waste Management Hardening
+**Priority:** P1 (already crashed laptop once)
+**Effort:** human ~1 day / CC ~30 min
+
+The 2026-04-07 laptop crash was caused by `/tmp/mineru_server.log` growing to 6.7GB
+from an unbounded "out of space" error spam loop emitted by native code (torch/MinerU/PaddleOCR),
+amplified by ~30K per-page debug `print()` statements per book in our own code. Disk
+filled to 99%, every subsequent file write failed and printed *another* error to the
+same log. Positive feedback loop.
+
+The acute fix (delete logs, clear Downloads, ship `_cleanup_task`+DELETE endpoint+auto-cleanup
+daemon) has been deployed in PR #1. This TODO is the structural hardening that prevents
+recurrence and was already audited + reviewed by `/plan-eng-review`. Plan file:
+`~/.claude/plans/harmonic-noodling-crab.md` ("Cleanup & Waste Management Audit" section).
+
+**Approved scope (7 fixes):**
+1. **Log rotation** — replace `print()` with `logging` + `RotatingFileHandler(50MB x 3)`
+   AND redirect `sys.stdout`/`sys.stderr` through a `StreamToLogger` so MinerU/torch
+   native prints are also rotated. Set `logging.raiseExceptions = False` so logging
+   errors can never re-trigger the loop.
+2. **Demote per-page/per-block debug prints** to `logger.debug` (lines 332, 348, 444,
+   453, 477, 507, 518, 668, 678, 693, 703, 713, 1048 in `mineru_server.py`).
+3. **Startup sweep** — `glob /tmp/mineru_*` and `shutil.rmtree` orphans on boot.
+4. **Gate `_pdf_bytes` storage** on `config.true_copy_export == true` so default flow
+   doesn't hold ~300MB raw PDF in memory for 10 minutes after completion.
+5. **Disk-space safeguard** — reject `/file_parse` with HTTP 507 if `shutil.disk_usage('/tmp').free < 2GB`.
+6. **Pre-warm failure** — set `_server_status = 'failed'` and `sys.exit(1)` on
+   `_pre_warm_models()` exception so launcher can decide to restart.
+7. **Regression test** — pytest covering true-copy + no-`_pdf_bytes` interaction so
+   gating #4 doesn't silently break true-copy export.
+
+**Deferred (intentionally NOT in scope):**
+- Tightening auto-cleanup interval (Issue 5 from audit) — irrelevant now that client
+  always DELETEs after exports.
+- 20-doc RSS smoke test (Issue 6) — `psutil` instrumentation already in `_cleanup_task`
+  line 153, can be verified ad-hoc.
+- Streaming PDF upload — multi-day work, separate spike.
+
+**Why deferred from current branch:** User triaged this as lower priority than the
+font-size rendering bug (TODO 18) found across 3 OCR'd documents. Logging issue is
+mitigated for now by the 117GB Downloads cleanup + the log truncation, but the
+structural fix should land before the next batch run.
+
+**Depends on:** Nothing
+**Blocked by:** Nothing

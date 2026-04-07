@@ -17,6 +17,18 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8899", "--directory", "/tmp"],
       "port": 8899
+    },
+    {
+      "name": "tc-output",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8901", "--directory", "/Users/siraj/untitled folder"],
+      "port": 8901
+    },
+    {
+      "name": "tc-paged",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8902", "--directory", "/tmp/font_audit/html_paged"],
+      "port": 8902
     }
   ]
 }
