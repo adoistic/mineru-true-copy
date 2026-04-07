@@ -293,6 +293,7 @@ function getFitScript(): string {
   return `(function() {
   var LINE_HEIGHT_RATIO = 1.2;
   var FONT_FAMILY = '"Inter", sans-serif';
+  var FLOOR = 1;
   var regions = document.querySelectorAll('[data-fit="true"]');
 
   /**
@@ -308,7 +309,6 @@ function getFitScript(): string {
     // Map char offsets in original text to offsets in clean text.
     // Each {{EQ:N}} removal shifts subsequent offsets by its length.
     var offsets = [];
-    var shift = 0;
     var placeholderRe = /\\{\\{EQ:(\\d+)\\}\\}/g;
     var m;
     var removals = [];
@@ -336,16 +336,12 @@ function getFitScript(): string {
     var charPos = 0;
 
     while (true) {
-      // Calculate equation widths on this line
       var eqWidthOnLine = 0;
       for (var ei = 0; ei < eqInfo.length; ei++) {
-        // An equation is on this line if its char offset >= charPos
-        // We'll check after layout which equations fell on this line
         var eqH = lineH * eqInfo[ei].heightRatio;
         var eqW = eqH * eqInfo[ei].aspectRatio;
         if (offsets[ei] >= charPos) {
           eqWidthOnLine += eqW;
-          // Only count each equation once (for the first line it could be on)
           offsets[ei] = -1;
         }
       }
@@ -362,6 +358,58 @@ function getFitScript(): string {
     return totalHeight;
   }
 
+  // Unified measurement at a given font size. Routes to the equation-aware
+  // path when needed, otherwise the simple Pretext.prepare/layout path.
+  function measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo) {
+    var font = (isBold ? '600 ' : '') + size + 'px ' + FONT_FAMILY;
+    var lineH = Math.round(size * LINE_HEIGHT_RATIO);
+    if (lineH < 1) lineH = 1;
+    if (hasEquations) {
+      return measureWithEquations(rawText, font, boxWidth, lineH, eqInfo, opts);
+    }
+    var prepared = Pretext.prepare(rawText, font, opts);
+    var result = Pretext.layout(prepared, boxWidth, lineH);
+    return result.height;
+  }
+
+  // Discover dynamic [lo, hi] bounds for the binary search by probing a
+  // ladder of candidate sizes derived from the box height. Binary search
+  // invariant: lo = largest known-fitting size, hi = smallest known-NOT-fitting
+  // size. So the first candidate that fits in the descending ladder becomes
+  // lo, and the previous (larger, failed) candidate becomes hi.
+  // Falls back to FLOOR if even the smallest candidate doesn't fit.
+  function findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo) {
+    var ladder = [
+      boxHeight * 4,
+      boxHeight * 2,
+      boxHeight,
+      boxHeight / 2,
+      boxHeight / 4,
+      FLOOR
+    ];
+    var clean = [];
+    for (var k = 0; k < ladder.length; k++) {
+      var v = ladder[k];
+      if (!isFinite(v) || v <= 0) continue;
+      if (v < FLOOR) v = FLOOR;
+      if (clean.length === 0 || v < clean[clean.length - 1]) clean.push(v);
+    }
+    if (clean.length === 0) clean.push(FLOOR);
+    if (clean[clean.length - 1] > FLOOR) clean.push(FLOOR);
+
+    var prevFailed = null;
+    for (var j = 0; j < clean.length; j++) {
+      var size = clean[j];
+      var h = measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo);
+      if (h <= boxHeight) {
+        var hi = prevFailed !== null ? prevFailed : size;
+        return { lo: size, hi: hi };
+      }
+      prevFailed = size;
+    }
+    return { lo: FLOOR, hi: FLOOR };
+  }
+
   for (var i = 0; i < regions.length; i++) {
     var el = regions[i];
     var boxWidth = parseFloat(el.style.width);
@@ -375,37 +423,28 @@ function getFitScript(): string {
     var eqInfo = eqInfoAttr ? JSON.parse(eqInfoAttr) : null;
     var hasEquations = eqInfo && eqInfo.length > 0;
 
-    // Binary search: largest font size where text + equations fit the box
     var isBold = el.hasAttribute('data-bold');
-    var lo = 5;
-    var hi = Math.min(boxHeight, 72);
+    var opts = el.hasAttribute('data-prewrap') ? { whiteSpace: 'pre-wrap' } : undefined;
+
+    // Phase 1: probe ladder to discover dynamic [lo, hi] bounds.
+    var bounds = findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo);
+    var lo = bounds.lo;
+    var hi = bounds.hi;
     var bestSize = lo;
 
+    // Phase 2: binary search within the discovered window.
     for (var iter = 0; iter < 20; iter++) {
+      if (hi - lo < 0.5) break;
       var mid = (lo + hi) / 2;
-      var font = (isBold ? '600 ' : '') + mid + 'px ' + FONT_FAMILY;
-      var lineH = Math.round(mid * LINE_HEIGHT_RATIO);
-      var opts = el.hasAttribute('data-prewrap') ? { whiteSpace: 'pre-wrap' } : undefined;
-
-      var measuredHeight;
-      if (hasEquations) {
-        // Flow text around equation images using layoutNextLine
-        measuredHeight = measureWithEquations(rawText, font, boxWidth, lineH, eqInfo, opts);
-      } else {
-        // Simple path: no equations, use prepare + layout
-        var prepared = Pretext.prepare(rawText, font, opts);
-        var result = Pretext.layout(prepared, boxWidth, lineH);
-        measuredHeight = result.height;
-      }
-
+      var measuredHeight = measureAt(rawText, mid, boxWidth, isBold, opts, hasEquations, eqInfo);
       if (measuredHeight <= boxHeight) {
         bestSize = mid;
         lo = mid;
       } else {
         hi = mid;
       }
-      if (hi - lo < 0.5) break;
     }
+    if (bestSize < FLOOR) bestSize = FLOOR;
 
     el.style.fontSize = bestSize.toFixed(1) + 'px';
     var computedLineH = Math.round(bestSize * LINE_HEIGHT_RATIO);
