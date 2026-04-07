@@ -835,6 +835,8 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
 
         text = block.get('text', '').strip()
         bbox = list(block.get('bbox', [0, 0, 0, 0]))
+        if len(bbox) < 4:
+            bbox = [0, 0, 0, 0]
         block_h = bbox[3] - bbox[1]
 
         # Skip non-text blocks, empty blocks, or blocks with enough space
@@ -858,6 +860,8 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
             next_block = blocks[j]
             next_text = next_block.get('text', '').strip()
             next_bbox = next_block.get('bbox', [0, 0, 0, 0])
+            if len(next_bbox) < 4:
+                next_bbox = [0, 0, 0, 0]
             next_y1 = next_bbox[1]
 
             # Stop if: non-empty block, or large vertical gap (>5px), or different type
