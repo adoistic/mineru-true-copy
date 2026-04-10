@@ -13,7 +13,7 @@
  * that runs at open-time in self-contained HTML files. Both implementations use
  * the same algorithm and should produce identical results for the same inputs.
  */
-import Pretext from '@chenglou/pretext';
+import * as Pretext from '@chenglou/pretext';
 
 const LINE_HEIGHT_RATIO = 1.2;
 const FLOOR = 1; // minimum font size in points
@@ -39,7 +39,7 @@ function measureWithEquations(
   boxWidth: number,
   lineH: number,
   eqInfo: EquationInfo[],
-  opts?: { whiteSpace?: string },
+  opts?: Record<string, unknown>,
 ): number {
   const cleanText = text.replace(/\{\{EQ:\d+\}\}/g, '');
   const prepared = Pretext.prepareWithSegments(cleanText, font, opts);
@@ -102,7 +102,7 @@ function measureAt(
   size: number,
   boxWidth: number,
   isBold: boolean,
-  opts: { whiteSpace?: string } | undefined,
+  opts: Record<string, unknown> | undefined,
   eqInfo: EquationInfo[] | null,
   fontFamily: string,
 ): number {
@@ -128,7 +128,7 @@ function findFontBounds(
   boxWidth: number,
   boxHeight: number,
   isBold: boolean,
-  opts: { whiteSpace?: string } | undefined,
+  opts: Record<string, unknown> | undefined,
   eqInfo: EquationInfo[] | null,
   fontFamily: string,
 ): { lo: number; hi: number } {
@@ -192,7 +192,7 @@ export function fitTextToBox(
     return { fontSize: FLOOR, lineHeight: Math.round(FLOOR * LINE_HEIGHT_RATIO) };
   }
 
-  const opts = preWrap ? { whiteSpace: 'pre-wrap' } : undefined;
+  const opts = preWrap ? { whiteSpace: 'pre-wrap' as const } : undefined;
 
   // Phase 1: probe ladder to discover [lo, hi] bounds
   const bounds = findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, eqInfo, fontFamily);

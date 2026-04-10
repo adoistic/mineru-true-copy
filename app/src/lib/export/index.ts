@@ -10,6 +10,11 @@ import { mineruToHtml, HtmlConversionOptions } from '@/lib/mineru/html-converter
 import { htmlToMarkdown } from './markdown';
 import { createSearchablePdf } from './searchable-pdf';
 import { createTrueCopyHtml } from './true-copy-html';
+import { createTrueCopyDocx } from './true-copy-docx';
+import { createTrueCopyPdf } from './true-copy-pdf';
+import { createTrueCopyPptx } from './true-copy-pptx';
+import { createReflowedDocx } from './reflowed-docx';
+import { createReflowedPdf } from './reflowed-pdf';
 import { createEpub } from './epub';
 import { createZip } from './zip';
 import fs from 'fs';
@@ -161,6 +166,67 @@ async function exportFormat(
       });
       const filePath = path.join(outputFolder, `${baseName}_true_copy.html`);
       fs.writeFileSync(filePath, textOnly, 'utf-8');
+      return filePath;
+    }
+
+    case 'true_copy_docx':
+    case 'docx': {
+      if (!taskId) {
+        console.warn('[Export] True-copy DOCX requires a live taskId');
+        return null;
+      }
+      const docxBuffer = await createTrueCopyDocx(mineruOutput, taskId, {
+        removeHeadersFooters: params.removeHeadersFooters,
+        includeImages: params.includeBenchmarkImages,
+      });
+      const filePath = path.join(outputFolder, `${baseName}_true_copy.docx`);
+      fs.writeFileSync(filePath, Buffer.from(docxBuffer));
+      return filePath;
+    }
+
+    case 'true_copy_pdf': {
+      if (!taskId) {
+        console.warn('[Export] True-copy PDF requires a live taskId');
+        return null;
+      }
+      const pdfBuffer = await createTrueCopyPdf(mineruOutput, taskId, {
+        removeHeadersFooters: params.removeHeadersFooters,
+        includeImages: params.includeBenchmarkImages,
+      });
+      const filePath = path.join(outputFolder, `${baseName}_true_copy.pdf`);
+      fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
+      return filePath;
+    }
+
+    case 'true_copy_pptx': {
+      if (!taskId) {
+        console.warn('[Export] True-copy PPTX requires a live taskId');
+        return null;
+      }
+      const pptxBuffer = await createTrueCopyPptx(mineruOutput, taskId, {
+        removeHeadersFooters: params.removeHeadersFooters,
+        includeImages: params.includeBenchmarkImages,
+      });
+      const filePath = path.join(outputFolder, `${baseName}_true_copy.pptx`);
+      fs.writeFileSync(filePath, Buffer.from(pptxBuffer));
+      return filePath;
+    }
+
+    case 'reflowed_docx': {
+      const reflowedDocxBuf = await createReflowedDocx(mineruOutput, {
+        removeHeadersFooters: params.removeHeadersFooters,
+      });
+      const filePath = path.join(outputFolder, `${baseName}.docx`);
+      fs.writeFileSync(filePath, Buffer.from(reflowedDocxBuf));
+      return filePath;
+    }
+
+    case 'reflowed_pdf': {
+      const reflowedPdfBuf = await createReflowedPdf(mineruOutput, {
+        removeHeadersFooters: params.removeHeadersFooters,
+      });
+      const filePath = path.join(outputFolder, `${baseName}.pdf`);
+      fs.writeFileSync(filePath, Buffer.from(reflowedPdfBuf));
       return filePath;
     }
 

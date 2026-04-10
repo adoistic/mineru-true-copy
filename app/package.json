@@ -28,6 +28,7 @@
     "next": "16.2.2",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.6.205",
+    "pptxgenjs": "^4.0.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "turndown": "^7.2.2",
