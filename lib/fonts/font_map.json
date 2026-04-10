@@ -1,0 +1,188 @@
+{
+  "_comment": "Maps detected font names (lowercase, subset-prefix stripped) to bundled WOFF2 files. Used by both PyMuPDF (digital-born) and ResNet-18 (scanned) detection paths.",
+
+  "arial": {"file": "Arimo-Regular.woff2", "family": "Arimo"},
+  "arial-bold": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+  "arial-boldmt": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+  "arial-italic": {"file": "Arimo-Italic.woff2", "family": "Arimo"},
+  "arial-bolditalic": {"file": "Arimo-BoldItalic.woff2", "family": "Arimo"},
+  "arialmt": {"file": "Arimo-Regular.woff2", "family": "Arimo"},
+  "arial black": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+  "arialblack": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+
+  "helvetica": {"file": "Arimo-Regular.woff2", "family": "Arimo"},
+  "helvetica-bold": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+  "helvetica-boldoblique": {"file": "Arimo-BoldItalic.woff2", "family": "Arimo"},
+  "helvetica-oblique": {"file": "Arimo-Italic.woff2", "family": "Arimo"},
+  "helveticaneue": {"file": "Arimo-Regular.woff2", "family": "Arimo"},
+  "helveticaneue-bold": {"file": "Arimo-Bold.woff2", "family": "Arimo"},
+
+  "times new roman": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "timesnewroman": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "timesnewromanpsmt": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "timesnewromanps-boldmt": {"file": "Tinos-Bold.woff2", "family": "Tinos"},
+  "timesnewromanps-italicmt": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "timesnewromanps-bolditalicmt": {"file": "Tinos-BoldItalic.woff2", "family": "Tinos"},
+  "times-roman": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "times-bold": {"file": "Tinos-Bold.woff2", "family": "Tinos"},
+  "times-italic": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "times-bolditalic": {"file": "Tinos-BoldItalic.woff2", "family": "Tinos"},
+
+  "courier": {"file": "Cousine-Regular.woff2", "family": "Cousine"},
+  "courier-bold": {"file": "Cousine-Bold.woff2", "family": "Cousine"},
+  "courier-oblique": {"file": "Cousine-Italic.woff2", "family": "Cousine"},
+  "courier-boldoblique": {"file": "Cousine-BoldItalic.woff2", "family": "Cousine"},
+  "courier new": {"file": "Cousine-Regular.woff2", "family": "Cousine"},
+  "couriernewpsmt": {"file": "Cousine-Regular.woff2", "family": "Cousine"},
+  "couriernewps-boldmt": {"file": "Cousine-Bold.woff2", "family": "Cousine"},
+  "couriernewps-italicmt": {"file": "Cousine-Italic.woff2", "family": "Cousine"},
+  "couriernewps-bolditalicmt": {"file": "Cousine-BoldItalic.woff2", "family": "Cousine"},
+
+  "georgia": {"file": "Gelasio-Regular.woff2", "family": "Gelasio"},
+  "georgia-bold": {"file": "Gelasio-Regular.woff2", "family": "Gelasio"},
+
+  "tahoma": {"file": "FiraSans-Regular.woff2", "family": "Fira Sans"},
+  "tahoma-bold": {"file": "FiraSans-Bold.woff2", "family": "Fira Sans"},
+
+  "trebuchet ms": {"file": "FiraSans-Regular.woff2", "family": "Fira Sans"},
+  "trebuchetms": {"file": "FiraSans-Regular.woff2", "family": "Fira Sans"},
+  "trebuchetms-bold": {"file": "FiraSans-Bold.woff2", "family": "Fira Sans"},
+  "trebuchetms-italic": {"file": "FiraSans-Italic.woff2", "family": "Fira Sans"},
+  "trebuchetms-bolditalic": {"file": "FiraSans-BoldItalic.woff2", "family": "Fira Sans"},
+
+  "verdana": {"file": "Nunito-Regular.woff2", "family": "Nunito"},
+  "verdana-bold": {"file": "Nunito-Bold.woff2", "family": "Nunito"},
+
+  "avenir": {"file": "Nunito-Regular.woff2", "family": "Nunito"},
+  "avenir-book": {"file": "Nunito-Regular.woff2", "family": "Nunito"},
+  "avenir-heavy": {"file": "Nunito-Bold.woff2", "family": "Nunito"},
+
+  "impact": {"file": "Anton-Regular.woff2", "family": "Anton"},
+
+  "garamond": {"file": "EBGaramond-Regular.woff2", "family": "EB Garamond"},
+  "ebgaramond": {"file": "EBGaramond-Regular.woff2", "family": "EB Garamond"},
+  "ebgaramond-regular": {"file": "EBGaramond-Regular.woff2", "family": "EB Garamond"},
+
+  "palatino": {"file": "Lora-Regular.woff2", "family": "Lora"},
+  "palatino-roman": {"file": "Lora-Regular.woff2", "family": "Lora"},
+  "palatino-bold": {"file": "Lora-Bold.woff2", "family": "Lora"},
+  "palatinolinotype-roman": {"file": "Lora-Regular.woff2", "family": "Lora"},
+
+  "roboto": {"file": "Roboto-Regular.woff2", "family": "Roboto"},
+  "roboto-regular": {"file": "Roboto-Regular.woff2", "family": "Roboto"},
+  "roboto-bold": {"file": "Roboto-Bold.woff2", "family": "Roboto"},
+  "roboto-medium": {"file": "Roboto-Bold.woff2", "family": "Roboto"},
+
+  "robotomono": {"file": "RobotoMono-Regular.woff2", "family": "Roboto Mono"},
+  "robotomono-regular": {"file": "RobotoMono-Regular.woff2", "family": "Roboto Mono"},
+  "robotomono-bold": {"file": "RobotoMono-Bold.woff2", "family": "Roboto Mono"},
+
+  "robotoslab": {"file": "RobotoSlab-Regular.woff2", "family": "Roboto Slab"},
+  "robotoslab-regular": {"file": "RobotoSlab-Regular.woff2", "family": "Roboto Slab"},
+  "robotoslab-bold": {"file": "RobotoSlab-Bold.woff2", "family": "Roboto Slab"},
+
+  "opensans": {"file": "OpenSans-Regular.woff2", "family": "Open Sans"},
+  "opensans-regular": {"file": "OpenSans-Regular.woff2", "family": "Open Sans"},
+  "opensans-bold": {"file": "OpenSans-Bold.woff2", "family": "Open Sans"},
+  "opensans-light": {"file": "OpenSans-Regular.woff2", "family": "Open Sans"},
+  "open sans": {"file": "OpenSans-Regular.woff2", "family": "Open Sans"},
+
+  "inter": {"file": "Inter-Regular.woff2", "family": "Inter"},
+  "inter-regular": {"file": "Inter-Regular.woff2", "family": "Inter"},
+
+  "lato": {"file": "Lato-Regular.woff2", "family": "Lato"},
+  "lato-regular": {"file": "Lato-Regular.woff2", "family": "Lato"},
+  "lato-bold": {"file": "Lato-Bold.woff2", "family": "Lato"},
+
+  "lora": {"file": "Lora-Regular.woff2", "family": "Lora"},
+  "lora-regular": {"file": "Lora-Regular.woff2", "family": "Lora"},
+  "lora-bold": {"file": "Lora-Bold.woff2", "family": "Lora"},
+
+  "merriweather": {"file": "Merriweather-Regular.woff2", "family": "Merriweather"},
+  "merriweather-regular": {"file": "Merriweather-Regular.woff2", "family": "Merriweather"},
+  "merriweather-bold": {"file": "Merriweather-Bold.woff2", "family": "Merriweather"},
+
+  "poppins": {"file": "Poppins-Regular.woff2", "family": "Poppins"},
+  "poppins-regular": {"file": "Poppins-Regular.woff2", "family": "Poppins"},
+  "poppins-bold": {"file": "Poppins-Bold.woff2", "family": "Poppins"},
+
+  "ibmplexsans": {"file": "IBMPlexSans-Regular.woff2", "family": "IBM Plex Sans"},
+  "ibmplexsans-regular": {"file": "IBMPlexSans-Regular.woff2", "family": "IBM Plex Sans"},
+  "ibmplexsans-bold": {"file": "IBMPlexSans-Bold.woff2", "family": "IBM Plex Sans"},
+
+  "titilliumweb": {"file": "TitilliumWeb-Regular.woff2", "family": "Titillium Web"},
+  "titilliumweb-regular": {"file": "TitilliumWeb-Regular.woff2", "family": "Titillium Web"},
+
+  "rubik": {"file": "Rubik-Regular.woff2", "family": "Rubik"},
+  "rubik-regular": {"file": "Rubik-Regular.woff2", "family": "Rubik"},
+
+  "spacemono": {"file": "SpaceMono-Regular.woff2", "family": "Space Mono"},
+  "spacemono-regular": {"file": "SpaceMono-Regular.woff2", "family": "Space Mono"},
+  "spacemono-bold": {"file": "SpaceMono-Bold.woff2", "family": "Space Mono"},
+
+  "alfaslabone": {"file": "AlfaSlabOne-Regular.woff2", "family": "Alfa Slab One"},
+  "alfaslabone-regular": {"file": "AlfaSlabOne-Regular.woff2", "family": "Alfa Slab One"},
+
+  "bangers": {"file": "Bangers-Regular.woff2", "family": "Bangers"},
+  "bangers-regular": {"file": "Bangers-Regular.woff2", "family": "Bangers"},
+
+  "blackopsone": {"file": "BlackOpsOne-Regular.woff2", "family": "Black Ops One"},
+  "blackopsone-regular": {"file": "BlackOpsOne-Regular.woff2", "family": "Black Ops One"},
+
+  "lobster": {"file": "Lobster-Regular.woff2", "family": "Lobster"},
+  "lobster-regular": {"file": "Lobster-Regular.woff2", "family": "Lobster"},
+
+  "pacifico": {"file": "Pacifico-Regular.woff2", "family": "Pacifico"},
+  "pacifico-regular": {"file": "Pacifico-Regular.woff2", "family": "Pacifico"},
+
+  "playfairdisplay": {"file": "PlayfairDisplay-Regular.woff2", "family": "Playfair Display"},
+  "playfairdisplay-regular": {"file": "PlayfairDisplay-Regular.woff2", "family": "Playfair Display"},
+
+  "pixelifysans": {"file": "PixelifySans-Regular.woff2", "family": "Pixelify Sans"},
+  "pixelifysans-regular": {"file": "PixelifySans-Regular.woff2", "family": "Pixelify Sans"},
+
+  "architectsdaughter": {"file": "ArchitectsDaughter-Regular.woff2", "family": "Architects Daughter"},
+  "architectsdaughter-regular": {"file": "ArchitectsDaughter-Regular.woff2", "family": "Architects Daughter"},
+
+  "kaushanscript": {"file": "KaushanScript-Regular.woff2", "family": "Kaushan Script"},
+  "kaushanscript-regular": {"file": "KaushanScript-Regular.woff2", "family": "Kaushan Script"},
+
+  "niconne": {"file": "Niconne-Regular.woff2", "family": "Niconne"},
+  "niconne-regular": {"file": "Niconne-Regular.woff2", "family": "Niconne"},
+
+  "rakkas": {"file": "Rakkas-Regular.woff2", "family": "Rakkas"},
+  "rakkas-regular": {"file": "Rakkas-Regular.woff2", "family": "Rakkas"},
+
+  "nunito": {"file": "Nunito-Regular.woff2", "family": "Nunito"},
+  "nunito-regular": {"file": "Nunito-Regular.woff2", "family": "Nunito"},
+  "nunito-bold": {"file": "Nunito-Bold.woff2", "family": "Nunito"},
+
+  "firasans": {"file": "FiraSans-Regular.woff2", "family": "Fira Sans"},
+  "firasans-regular": {"file": "FiraSans-Regular.woff2", "family": "Fira Sans"},
+  "firasans-bold": {"file": "FiraSans-Bold.woff2", "family": "Fira Sans"},
+  "firasans-italic": {"file": "FiraSans-Italic.woff2", "family": "Fira Sans"},
+  "firasans-bolditalic": {"file": "FiraSans-BoldItalic.woff2", "family": "Fira Sans"},
+
+  "gelasio": {"file": "Gelasio-Regular.woff2", "family": "Gelasio"},
+  "gelasio-regular": {"file": "Gelasio-Regular.woff2", "family": "Gelasio"},
+
+  "anton": {"file": "Anton-Regular.woff2", "family": "Anton"},
+  "anton-regular": {"file": "Anton-Regular.woff2", "family": "Anton"},
+
+  "cmr10": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "cmr12": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "cmr7": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "cmr5": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "cmbx10": {"file": "Tinos-Bold.woff2", "family": "Tinos"},
+  "cmbx12": {"file": "Tinos-Bold.woff2", "family": "Tinos"},
+  "cmti10": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "cmti12": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "cmtt10": {"file": "Cousine-Regular.woff2", "family": "Cousine"},
+  "cmss10": {"file": "Arimo-Regular.woff2", "family": "Arimo"},
+  "cmmi10": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "cmmi7": {"file": "Tinos-Italic.woff2", "family": "Tinos"},
+  "cmsy10": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+
+  "computermodern": {"file": "Tinos-Regular.woff2", "family": "Tinos"},
+  "computer modern": {"file": "Tinos-Regular.woff2", "family": "Tinos"}
+}

@@ -57,6 +57,7 @@ from magic_pdf.config.ocr_content_type import ContentType
 
 import base64
 import hashlib
+import re as _re
 import fitz  # PyMuPDF
 
 
@@ -104,6 +105,101 @@ def _safe_bbox(val) -> list:
     if not val or not isinstance(val, (list, tuple)) or len(val) < 4:
         return [0, 0, 0, 0]
     return list(val[:4])
+
+
+# ---------------------------------------------------------------------------
+# Font detection helpers (digital-born PDFs via PyMuPDF)
+# ---------------------------------------------------------------------------
+
+_SUBSET_PREFIX_RE = _re.compile(r'^[A-Z]{6}\+')
+
+# Load font mapping table
+_FONT_MAP_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib', 'fonts', 'font_map.json')
+try:
+    with open(_FONT_MAP_PATH) as _f:
+        _FONT_MAP: dict = {k: v for k, v in json.load(_f).items() if not k.startswith('_')}
+except FileNotFoundError:
+    print(f'[MinerU Server] WARNING: font_map.json not found at {_FONT_MAP_PATH}')
+    _FONT_MAP = {}
+
+
+def _normalize_font_name(ps_name: str) -> str:
+    """Strip subset prefix and normalize for lookup."""
+    if not ps_name:
+        return ''
+    name = _SUBSET_PREFIX_RE.sub('', ps_name)
+    return name.strip().lower()
+
+
+def _map_font_name(ps_name: str) -> tuple[str | None, str | None]:
+    """Look up a detected font name in the bundle mapping.
+
+    Returns (bundled_file, family_name) or (None, None) if no match.
+    Tries exact match first, then longest-substring match.
+    """
+    if not ps_name:
+        return (None, None)
+    norm = _normalize_font_name(ps_name)
+    if not norm:
+        return (None, None)
+    # Exact match
+    if norm in _FONT_MAP:
+        entry = _FONT_MAP[norm]
+        return (entry['file'], entry['family'])
+    # Longest substring match (so 'timesnewromanps-boldmt' matches 'timesnewromanps-boldmt')
+    matches = [(k, v) for k, v in _FONT_MAP.items() if k in norm]
+    if matches:
+        matches.sort(key=lambda kv: -len(kv[0]))
+        return (matches[0][1]['file'], matches[0][1]['family'])
+    return (None, None)
+
+
+def _discover_digital_fonts(fitz_doc) -> dict[int, list[tuple[str, list, int]]]:
+    """Pre-pass: extract (ps_font_name, bbox, char_count) per page from PyMuPDF.
+
+    Returns {page_idx: [(name, bbox, nchars), ...]}.
+    One call to get_text('dict') per page. Fast (~5ms/page).
+    """
+    page_fonts: dict[int, list[tuple[str, list, int]]] = {}
+    for page_idx in range(len(fitz_doc)):
+        spans_info: list[tuple[str, list, int]] = []
+        try:
+            page = fitz_doc[page_idx]
+            d = page.get_text('dict')
+            for block in d.get('blocks', []):
+                for line in block.get('lines', []):
+                    for span in line.get('spans', []):
+                        name = span.get('font', '') or ''
+                        bbox = list(span.get('bbox', [0, 0, 0, 0]))
+                        text = span.get('text', '') or ''
+                        if not name or not text.strip():
+                            continue
+                        spans_info.append((name, bbox, len(text)))
+        except Exception:
+            pass
+        page_fonts[page_idx] = spans_info
+    return page_fonts
+
+
+def _dominant_font_for_block(page_spans: list, block_bbox: list) -> str | None:
+    """Find the font with the most characters overlapping a block's bbox.
+
+    Returns the PostScript name (not yet mapped) or None.
+    """
+    if not page_spans:
+        return None
+    bx1, by1, bx2, by2 = block_bbox[:4]
+    char_counts: dict[str, int] = {}
+    for name, sbbox, nchars in page_spans:
+        sx1, sy1, sx2, sy2 = sbbox[:4]
+        # Span center inside block bbox
+        cx = (sx1 + sx2) / 2
+        cy = (sy1 + sy2) / 2
+        if bx1 <= cx <= bx2 and by1 <= cy <= by2:
+            char_counts[name] = char_counts.get(name, 0) + nchars
+    if not char_counts:
+        return None
+    return max(char_counts.items(), key=lambda kv: kv[1])[0]
 
 
 def _cleanup_task(task_id: str, *, remove_from_store: bool = False):
@@ -247,8 +343,80 @@ def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     print(f'[MinerU Server] Equation image cropping: {cropped} cropped')
 
 
+def _unmerge_cross_page_blocks(pdf_info: list) -> None:
+    """Reverse MinerU's cross-page paragraph merge for true-copy fidelity.
+
+    MinerU's para_split_v3.__merge_2_text_blocks moves lines from a later block
+    into an earlier block when a paragraph crosses a page boundary. It:
+      1. Marks each moved span with `cross_page=True` (config/constants.py)
+      2. Empties the later block's lines list
+      3. Flags the later block with `lines_deleted=True`
+
+    For reading-order output (markdown) this is correct — the paragraph is
+    represented once, on the page where it "starts". But for true-copy HTML,
+    each page's region bbox must match what was visible on that physical page,
+    otherwise a tiny 1-line bbox at the bottom of page N gets stuffed with the
+    full multi-line continuation paragraph. The font fitter then has no choice
+    but to shrink the text to 3-5px, or worse overflow the page.
+
+    This pass walks every block across all pages. For any block whose lines
+    contain cross_page-marked spans, it splits those lines out and restores
+    them to the next page's corresponding `lines_deleted` block (matching by
+    the order emptied blocks appear).
+
+    Mutates `pdf_info` in place. Safe to call multiple times (idempotent:
+    after the first pass, no spans are marked cross_page anymore).
+    """
+    # Collect queues of lines to restore, per-page, in order.
+    # Key insight: __merge_2_text_blocks iterates groups in reverse, so the
+    # earlier block (prev_block) accumulates the later block's lines. Walking
+    # pages in forward order, the first empty block on each page corresponds
+    # to the most recent stash from the previous page.
+    pending: list[list] = []  # queue of "lines lists" to restore
+
+    for page in pdf_info:
+        para_blocks = page.get('para_blocks', page.get('preproc_blocks', []))
+
+        for block in para_blocks:
+            # Restore emptied blocks first, before checking this block's own lines.
+            if block.get('lines_deleted') and not block.get('lines'):
+                if pending:
+                    restored = pending.pop(0)
+                    # Clear cross_page markers on restored lines — they're back
+                    # on their home page now.
+                    for line in restored:
+                        for span in line.get('spans', []):
+                            span.pop('cross_page', None)
+                    block['lines'] = restored
+                    block.pop('lines_deleted', None)
+
+            # Now look for cross_page lines in this block and split them off.
+            own_lines: list = []
+            cross_lines: list = []
+            for line in block.get('lines', []):
+                spans = line.get('spans', [])
+                # A line is "cross_page" if any of its spans is marked.
+                if spans and any(s.get('cross_page') for s in spans):
+                    cross_lines.append(line)
+                else:
+                    own_lines.append(line)
+
+            if cross_lines:
+                block['lines'] = own_lines
+                pending.append(cross_lines)
+
+    if pending:
+        print(f'[MinerU Server] WARNING: {len(pending)} cross_page line groups '
+              f'had no destination block — text may be truncated for those paragraphs.')
+
+
 def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | None = None):
     """Run full MinerU OCR pipeline and store the structured result."""
+    # Block here until a slot is free. This is the backpressure point: callers
+    # can submit thousands of tasks; they sit in 'pending' status until the
+    # semaphore releases. No 429s, no fail-and-retry storms.
+    _parse_semaphore.acquire()
+    acquired = True
     try:
         tasks[task_id]['status'] = 'processing'
         t_start = time.time()
@@ -306,6 +474,34 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         t3c = time.time()
         print(f'[MinerU Server] Step 2c (heading hierarchy): {t3c-t3b:.1f}s')
 
+        # Step 2d: Build a PARALLEL per-page-fidelity view for true-copy export.
+        # MinerU's para_split_v3 merges text across page boundaries (moves lines
+        # from a later block into an earlier block and empties the later block).
+        # This is correct for reading-order output (markdown/normal HTML) and we
+        # MUST preserve it — it's MinerU's native paragraph coherence.
+        #
+        # For true-copy HTML however, each page's region bbox must match what was
+        # visible on that physical page, otherwise a 15px bbox at the bottom of
+        # page N gets stuffed with a whole continuation paragraph.
+        #
+        # Approach: deep-copy pdf_info, run _unmerge_cross_page_blocks on the copy
+        # (using MinerU's own cross_page/lines_deleted markers), and build a lookup
+        # of per-block per-page text. The ORIGINAL pdf_info stays merged so normal
+        # HTML / markdown export keeps MinerU's reading-order output.
+        import copy as _copy_mod
+        _unmerged_info = _copy_mod.deepcopy(pdf_info_raw)
+        _unmerge_cross_page_blocks(_unmerged_info)
+        _per_page_text_lookup: dict[tuple[int, int], tuple[str, list]] = {}
+        for _upage in _unmerged_info:
+            _upi = _upage.get('page_idx', 0)
+            _ublocks = _upage.get('para_blocks', _upage.get('preproc_blocks', []))
+            for _ubi, _ublock in enumerate(_ublocks):
+                _utext, _, _, _, _uineq = _extract_block_content(_ublock, img_dir)
+                _per_page_text_lookup[(_upi, _ubi)] = (_utext, _uineq)
+        del _unmerged_info
+        t3d = time.time()
+        print(f'[MinerU Server] Step 2d (per-page un-merge view): {t3d-t3c:.1f}s')
+
         # Step 3: Convert pipeline output to the format the client expects
         # img_dir is where MinerU wrote extracted images
         _current_img_dir = img_dir
@@ -313,6 +509,32 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # Open PDF once for all cropping operations in Step 3
         _fitz_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
         _pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
+
+        # Step 2e: Document-level font discovery
+        # Always try PyMuPDF first (works for digital-born PDFs).
+        # If no text spans are found (scanned PDF), _pdf_is_scanned is set True
+        # and the ResNet-18 classifier runs after blocks are collected.
+        _digital_font_spans: dict[int, list[tuple[str, list, int]]] = {}
+        _used_fonts: dict[str, str] = {}  # {bundled_file: family_name}
+        _pdf_is_scanned = False
+        if _FONT_MAP:
+            _digital_font_spans = _discover_digital_fonts(_fitz_doc)
+            total_spans = sum(len(spans) for spans in _digital_font_spans.values())
+            if total_spans > 0:
+                all_names = {name for spans in _digital_font_spans.values()
+                             for name, _, _ in spans}
+                for name in all_names:
+                    bundled, family = _map_font_name(name)
+                    if bundled:
+                        _used_fonts[bundled] = family
+                t3e = time.time()
+                print(f'[MinerU Server] Step 2e (font discovery): {t3e-t3d:.1f}s, '
+                      f'{total_spans} spans, {len(_used_fonts)} unique fonts mapped')
+            else:
+                _pdf_is_scanned = True
+                t3e = time.time()
+                print(f'[MinerU Server] Step 2e: no text spans found — '
+                      f'PDF is scanned, will use ResNet-18 classifier')
 
         pages = []
         for page in pdf_info_raw:
@@ -339,7 +561,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             print(f'[MinerU Server] Page {page_idx}: block types = {block_types}')
 
             blocks = []
-            for b in para_blocks:
+            for _bi, b in enumerate(para_blocks):
                 block_type = b.get('type', 'text')
                 bbox = _safe_bbox(b.get('bbox'))
 
@@ -350,7 +572,12 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
 
                 # Extract content from the nested structure:
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
+                # NOTE: this reads MinerU's MERGED lines (cross-page paragraphs joined).
+                # The per-page un-merged version is looked up below and attached as
+                # `text_per_page` / `inline_equations_per_page` for true-copy export.
                 text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir)
+                text_per_page, inline_equations_per_page = _per_page_text_lookup.get(
+                    (page_idx, _bi), (text, inline_equations))
 
                 # Content-based list reclassification: MinerU's geometric heuristics
                 # miss MCQ patterns like (i), (a), (b). Our regex catches them.
@@ -372,14 +599,41 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                         print(f'[MinerU Server] Page {page_idx}: sidebar→image '
                               f'bbox={[round(x, 1) for x in bbox]}')
 
+                # Per-block font assignment
+                font_family = None
+                if block_type in ('text', 'title', 'list', 'index', 'caption',
+                                  'header', 'footer'):
+                    if _digital_font_spans:
+                        dom = _dominant_font_for_block(
+                            _digital_font_spans.get(page_idx, []), bbox)
+                        if dom:
+                            _, family = _map_font_name(dom)
+                            font_family = family
+                    # Fallback: use document-dominant font when per-block
+                    # lookup fails (bbox mismatch between MinerU and PyMuPDF)
+                    if not font_family and _used_fonts:
+                        font_family = next(iter(_used_fonts.values()))
+
                 block = {
                     'type': block_type,
                     'bbox': bbox,
                     'text': text,
                 }
+                if font_family:
+                    block['font_family'] = font_family
+
+                # Attach per-page (un-merged) text for true-copy export.
+                # Normal HTML/markdown export uses `text` (MinerU's cross-page
+                # merged paragraphs). True-copy uses `text_per_page` so
+                # continuation text doesn't get stuffed into the previous page's
+                # bbox. Only set when different from `text` to keep payload lean.
+                if text_per_page != text:
+                    block['text_per_page'] = text_per_page
 
                 if inline_equations:
                     block['inline_equations'] = inline_equations
+                if inline_equations_per_page and inline_equations_per_page != inline_equations:
+                    block['inline_equations_per_page'] = inline_equations_per_page
 
                 # Include heading level for title blocks
                 if block_type == 'title' and 'level' in b:
@@ -439,21 +693,57 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # normalised text appears on, and only keep text that is unique.
         _recover_discarded_blocks(pdf_info_raw, pages, img_dir, pdf_bytes, config)
 
+        # Scanned PDF font detection: sample blocks, run ResNet-18 classifier
+        if _pdf_is_scanned and not _used_fonts:
+            try:
+                from lib import font_classifier
+                candidates = []
+                for pg in pages:
+                    for blk in pg.get('preproc_blocks', []):
+                        if blk.get('type') in ('text', 'title', 'list', 'caption'):
+                            candidates.append((pg['page_idx'], blk['bbox']))
+                if candidates:
+                    _used_fonts = font_classifier.discover_scanned_fonts(
+                        _fitz_doc, candidates, max_samples=10)
+                    # Assign the dominant scanned font to all text blocks
+                    if _used_fonts:
+                        dominant_family = next(iter(_used_fonts.values()))
+                        for pg in pages:
+                            for blk in pg.get('preproc_blocks', []):
+                                if (blk.get('type') in ('text', 'title', 'list',
+                                                         'index', 'caption')
+                                        and 'font_family' not in blk):
+                                    blk['font_family'] = dominant_family
+                    print(f'[MinerU Server] Scanned font detection: '
+                          f'{len(_used_fonts)} fonts detected')
+            except ImportError:
+                print('[MinerU Server] font_classifier not available, '
+                      'skipping scanned font detection')
+            except Exception as e:
+                print(f'[MinerU Server] Scanned font detection failed: {e}')
+
         _fitz_doc.close()
 
         result = {
             'pdf_info': pages,
             'file_name': file_name,
         }
+        if _used_fonts:
+            result['used_fonts'] = _used_fonts
 
         tasks[task_id]['status'] = 'completed'
         tasks[task_id]['_completed_at'] = time.time()
         tasks[task_id]['result'] = result
-        # Store pipe_result for native export methods (content_list, markdown)
-        tasks[task_id]['_pipe_result'] = pipe_result
         tasks[task_id]['_img_dir'] = img_dir
         # Store PDF bytes for page image rasterization (true-copy export)
         tasks[task_id]['_pdf_bytes'] = pdf_bytes
+        # Drop heavy intermediates immediately. pipe_result holds tensors and
+        # the full inference state (~100-300MB); Next.js never calls the native
+        # /export endpoints so we can free it now instead of at LRU eviction.
+        del pipe_result
+        del infer_result
+        import gc
+        gc.collect()
 
         total_blocks = sum(len(p['preproc_blocks']) for p in pages)
         print(f'[MinerU Server] Task {task_id} completed: '
@@ -475,7 +765,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             _fitz_doc.close()
         except Exception:
             pass
-        _parse_semaphore.release()
+        if acquired:
+            _parse_semaphore.release()
 
 
 def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
@@ -1225,6 +1516,24 @@ class MineruHandler(BaseHTTPRequestHandler):
             self._send_json(200, safe_task)
             return
 
+        # GET /fonts/{filename} — serve bundled WOFF2 font files
+        if parsed.path.startswith('/fonts/'):
+            filename = os.path.basename(parsed.path[len('/fonts/'):])
+            font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                     'lib', 'fonts', filename)
+            if not filename.endswith('.woff2') or not os.path.exists(font_path):
+                self._send_json(404, {'error': 'Font not found'})
+                return
+            with open(font_path, 'rb') as f:
+                data = f.read()
+            self.send_response(200)
+            self.send_header('Content-Type', 'font/woff2')
+            self.send_header('Content-Length', str(len(data)))
+            self.send_header('Cache-Control', 'public, max-age=31536000')
+            self.end_headers()
+            self.wfile.write(data)
+            return
+
         self._send_json(404, {'error': 'Not found'})
 
     def do_DELETE(self):
@@ -1356,10 +1665,8 @@ class MineruHandler(BaseHTTPRequestHandler):
             self._send_json(400, {'error': 'No file found in request'})
             return
 
-        # Enforce concurrency limit — reject if another job is running
-        if not _parse_semaphore.acquire(blocking=False):
-            self._send_json(429, {'error': 'Server busy, try again later'})
-            return
+        # Concurrency limit is enforced inside the worker thread (blocking acquire),
+        # so HTTP submissions never fail with 429 — they queue as 'pending' tasks.
 
         # Parse display preferences from form fields
         config = {

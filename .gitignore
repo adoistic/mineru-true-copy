@@ -24,3 +24,4 @@ src-tauri/resources/node-standalone/
 src-tauri/resources/node-runtime/
 src-tauri/resources/models/
 app/.claude/
+app/.cache/

@@ -193,7 +193,7 @@ export function regionToHtml(region: MineruRegion, options: RegionRenderOptions)
     case 'header':
     case 'footer':
       // Should be filtered out if removeHeadersFooters is true
-      return `<div class="page-${region.type}">${escapeHtml(region.content)}</div>`;
+      return `<div class="page-${region.type}">${sanitizeFormattedText(region.content, formulaOpts)}</div>`;
 
     default:
       return `<p>${escapeHtml(region.content)}</p>`;

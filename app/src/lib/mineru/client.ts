@@ -10,7 +10,7 @@ export type MineruStatus = 'stopped' | 'starting' | 'running' | 'crashed';
 let mineruStatus: MineruStatus = 'stopped';
 let healthCheckTimer: NodeJS.Timeout | null = null;
 
-function getMineruUrl(): string {
+export function getMineruUrl(): string {
   return process.env.MINERU_API_URL || 'http://127.0.0.1:8765';
 }
 
@@ -145,10 +145,12 @@ export async function getTaskResult(taskId: string): Promise<{
 export async function pollForCompletion(
   taskId: string,
   onProgress?: (pagesCompleted: number) => void,
-  timeoutMs = 600000 // 10 minutes
+  // Default deadline is generous so batch jobs waiting behind hundreds of
+  // others on the MinerU semaphore don't time out. The Next.js queue enforces
+  // its own local concurrency cap; this timeout is the absolute ceiling.
+  timeoutMs = 24 * 60 * 60 * 1000 // 24 hours
 ): Promise<MineruOutput> {
   const start = Date.now();
-  let lastPages = 0;
 
   while (Date.now() - start < timeoutMs) {
     const result = await getTaskResult(taskId);
@@ -236,6 +238,7 @@ function parseMineruResult(raw: unknown): MineruOutput {
       total_pages: pages.length,
       file_name: (data.file_name as string) || '',
     },
+    used_fonts: (data.used_fonts as Record<string, string>) || undefined,
   };
 }
 
@@ -258,6 +261,9 @@ function parseRegions(page: Record<string, unknown>): MineruOutput['pages'][0]['
       img_data: block.img_data as string | undefined,
       img_mime: block.img_mime as string | undefined,
       inline_equations: block.inline_equations as Array<{latex: string; display: string; img_data?: string; img_mime?: string}> | undefined,
+      content_per_page: block.text_per_page as string | undefined,
+      inline_equations_per_page: block.inline_equations_per_page as Array<{latex: string; display: string; img_data?: string; img_mime?: string}> | undefined,
+      font_family: block.font_family as string | undefined,
     };
   });
 }

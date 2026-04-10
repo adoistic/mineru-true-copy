@@ -4,12 +4,13 @@
     {
       "name": "app",
       "runtimeExecutable": "/opt/homebrew/bin/node",
-      "runtimeArgs": ["node_modules/.bin/next", "dev"],
-      "port": 3000,
+      "runtimeArgs": ["node_modules/.bin/next", "dev", "--port", "53575"],
+      "port": 53575,
       "cwd": "app",
       "autoPort": false,
       "env": {
-        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+        "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+        "MINERU_API_URL": "http://localhost:54980"
       }
     },
     {

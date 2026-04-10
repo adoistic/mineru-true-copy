@@ -552,3 +552,136 @@ class TestMergeOverlappingBlocks:
         table = {'type': 'table', 'bbox': [68, 179, 528, 779], 'text': 'cell data'}
         out = _merge_overlapping_blocks([small, table])
         assert len(out) == 2
+
+
+# ============================================================================
+# Cross-page un-merge tests
+# ============================================================================
+
+def test_unmerge_cross_page_basic():
+    """Standard 2-page paragraph merge: lines get moved back to their home page."""
+    from mineru_server import _unmerge_cross_page_blocks
+
+    pdf_info = [
+        {
+            'page_idx': 0,
+            'page_size': {'width': 595, 'height': 842},
+            'para_blocks': [{
+                'type': 'text',
+                'bbox': [70, 750, 525, 773],
+                'lines': [
+                    {'bbox': [70, 750, 525, 773],
+                     'spans': [{'content': 'Own line page 0.', 'type': 'text'}]},
+                    {'bbox': [70, 72, 525, 95],
+                     'spans': [{'content': 'Line 1 from page 1.', 'type': 'text',
+                                'cross_page': True}]},
+                    {'bbox': [70, 96, 525, 119],
+                     'spans': [{'content': 'Line 2 from page 1.', 'type': 'text',
+                                'cross_page': True}]},
+                ],
+            }],
+        },
+        {
+            'page_idx': 1,
+            'page_size': {'width': 595, 'height': 842},
+            'para_blocks': [{
+                'type': 'text',
+                'bbox': [70, 72, 525, 200],
+                'lines': [],
+                'lines_deleted': True,
+            }],
+        },
+    ]
+
+    _unmerge_cross_page_blocks(pdf_info)
+
+    p0 = pdf_info[0]['para_blocks'][0]
+    p1 = pdf_info[1]['para_blocks'][0]
+
+    assert len(p0['lines']) == 1
+    assert p0['lines'][0]['spans'][0]['content'] == 'Own line page 0.'
+    assert len(p1['lines']) == 2
+    assert p1['lines'][0]['spans'][0]['content'] == 'Line 1 from page 1.'
+    assert p1['lines'][1]['spans'][0]['content'] == 'Line 2 from page 1.'
+    # Markers cleared after restoration
+    assert 'cross_page' not in p1['lines'][0]['spans'][0]
+    assert 'lines_deleted' not in p1
+
+
+def test_unmerge_no_cross_page_noop():
+    """With no cross_page markers, the function must be a no-op."""
+    from mineru_server import _unmerge_cross_page_blocks
+
+    pdf_info = [
+        {'page_idx': 0, 'page_size': {'width': 595, 'height': 842},
+         'para_blocks': [{'type': 'text', 'bbox': [70, 72, 525, 200],
+                          'lines': [{'bbox': [70, 72, 525, 95],
+                                     'spans': [{'content': 'Normal.', 'type': 'text'}]}]}]},
+    ]
+    _unmerge_cross_page_blocks(pdf_info)
+    assert len(pdf_info[0]['para_blocks'][0]['lines']) == 1
+
+
+def test_unmerge_idempotent():
+    """Running twice must not double-restore or drop lines."""
+    from mineru_server import _unmerge_cross_page_blocks
+    import copy
+
+    pdf_info = [
+        {'page_idx': 0, 'page_size': {'width': 595, 'height': 842},
+         'para_blocks': [{'type': 'text', 'bbox': [70, 750, 525, 773],
+                          'lines': [
+                              {'bbox': [70, 750, 525, 773],
+                               'spans': [{'content': 'Own.', 'type': 'text'}]},
+                              {'bbox': [70, 72, 525, 95],
+                               'spans': [{'content': 'Cross.', 'type': 'text',
+                                          'cross_page': True}]},
+                          ]}]},
+        {'page_idx': 1, 'page_size': {'width': 595, 'height': 842},
+         'para_blocks': [{'type': 'text', 'bbox': [70, 72, 525, 200],
+                          'lines': [], 'lines_deleted': True}]},
+    ]
+    _unmerge_cross_page_blocks(pdf_info)
+    snapshot = copy.deepcopy(pdf_info)
+    _unmerge_cross_page_blocks(pdf_info)
+    assert pdf_info == snapshot
+
+
+def test_unmerge_multiple_groups_same_page():
+    """Two independent cross_page groups on the same page pair — FIFO matching."""
+    from mineru_server import _unmerge_cross_page_blocks
+
+    pdf_info = [
+        {'page_idx': 0, 'page_size': {'width': 595, 'height': 842},
+         'para_blocks': [
+             {'type': 'text', 'bbox': [70, 400, 290, 420],
+              'lines': [
+                  {'bbox': [70, 400, 290, 420],
+                   'spans': [{'content': 'Col-A own.', 'type': 'text'}]},
+                  {'bbox': [70, 72, 290, 95],
+                   'spans': [{'content': 'Col-A cross.', 'type': 'text',
+                              'cross_page': True}]},
+              ]},
+             {'type': 'text', 'bbox': [310, 400, 525, 420],
+              'lines': [
+                  {'bbox': [310, 400, 525, 420],
+                   'spans': [{'content': 'Col-B own.', 'type': 'text'}]},
+                  {'bbox': [310, 72, 525, 95],
+                   'spans': [{'content': 'Col-B cross.', 'type': 'text',
+                              'cross_page': True}]},
+              ]},
+         ]},
+        {'page_idx': 1, 'page_size': {'width': 595, 'height': 842},
+         'para_blocks': [
+             {'type': 'text', 'bbox': [70, 72, 290, 200],
+              'lines': [], 'lines_deleted': True},
+             {'type': 'text', 'bbox': [310, 72, 525, 200],
+              'lines': [], 'lines_deleted': True},
+         ]},
+    ]
+
+    _unmerge_cross_page_blocks(pdf_info)
+
+    p1_blocks = pdf_info[1]['para_blocks']
+    assert p1_blocks[0]['lines'][0]['spans'][0]['content'] == 'Col-A cross.'
+    assert p1_blocks[1]['lines'][0]['spans'][0]['content'] == 'Col-B cross.'

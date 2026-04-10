@@ -13,7 +13,7 @@
  *   after the initial canvas measurement pass.
  */
 import { MineruOutput, MineruPage, MineruRegion } from '@/types';
-import { getPageImage } from '@/lib/mineru/client';
+import { getPageImage, getMineruUrl } from '@/lib/mineru/client';
 import { sanitizeTableHtml, sanitizeFormattedText, escapeHtml } from '@/lib/mineru/html-converter';
 import fs from 'fs';
 import path from 'path';
@@ -55,7 +55,13 @@ export async function createTrueCopyHtml(
     pageHtmlParts.push(renderPage(page, imageBase64, i, options?.removeHeadersFooters ?? false));
   }
 
-  return buildDocument(title, pageHtmlParts.join('\n'));
+  // Build @font-face rules for fonts used in this document
+  let fontFaceCss = '';
+  if (mineruOutput.used_fonts && Object.keys(mineruOutput.used_fonts).length > 0) {
+    fontFaceCss = await buildFontFaceRules(mineruOutput.used_fonts);
+  }
+
+  return buildDocument(title, pageHtmlParts.join('\n'), fontFaceCss);
 }
 
 function renderPage(page: MineruPage, imageBase64: string, pageIndex: number, removeHeadersFooters: boolean): string {
@@ -70,9 +76,13 @@ function renderPage(page: MineruPage, imageBase64: string, pageIndex: number, re
 
   pageHtml.push('<div class="tc-text-layer">');
   for (const region of regions) {
-    // Skip empty regions — but tables can have table_html without content text
-    const hasContent = (region.content && region.content.trim() !== '') ||
-                       (region.type === 'table' && region.table_html);
+    // Skip empty regions — but figures/formulas/tables carry their visual
+    // content in img_data / table_html, not in `content`. A caption-less
+    // figure is still a valid figure and must render.
+    const effectiveText = region.content_per_page ?? region.content;
+    const hasContent = (effectiveText && effectiveText.trim() !== '') ||
+                       (region.type === 'table' && region.table_html) ||
+                       ((region.type === 'figure' || region.type === 'formula') && region.img_data);
     if (!hasContent) continue;
     if (removeHeadersFooters && (region.type === 'header' || region.type === 'footer')) continue;
 
@@ -92,8 +102,17 @@ function renderRegion(region: MineruRegion): string {
 
   if (regionWidth <= 0 || regionHeight <= 0) return '';
 
+  // True-copy prefers the per-page (un-merged) text when available so
+  // continuation paragraphs from the next page don't get stuffed into this
+  // region's bbox. Falls back to `content` when the server didn't emit a
+  // distinct per-page variant (meaning there was no cross-page merge).
+  const effectiveContent = region.content_per_page ?? region.content;
+  const effectiveEquations = region.inline_equations_per_page ?? region.inline_equations;
+
   // Position the box at exact bbox coordinates — font size will be set dynamically by JS
-  const style = `left:${x1}px;top:${y1}px;width:${regionWidth}px;height:${regionHeight}px`;
+  const fontFamily = region.font_family ?? 'Inter';
+  const quotedFamily = `'${fontFamily}', 'Inter', sans-serif`;
+  const style = `left:${x1}px;top:${y1}px;width:${regionWidth}px;height:${regionHeight}px;font-family:${quotedFamily}`;
 
   let content: string;
   let dataAttrs = '';
@@ -105,32 +124,33 @@ function renderRegion(region: MineruRegion): string {
     return `<div class="tc-region tc-region-${region.type}" style="${style}"${dataAttrs}>${content}</div>`;
   } else if (region.type === 'figure' || region.type === 'formula') {
     if (region.img_data && region.img_mime) {
-      content = `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(region.content || 'Formula')}" style="max-width:100%;max-height:100%;object-fit:contain">`;
+      content = `<img src="data:${region.img_mime};base64,${region.img_data}" alt="${escapeHtml(effectiveContent || 'Formula')}" style="max-width:100%;max-height:100%;object-fit:contain">`;
     } else {
       return '';
     }
   } else {
     // Strip HTML tags for measurement — Pretext measures plain text only
-    const rawText = region.content.replace(/<[^>]*>/g, '');
-    const isBold = region.type === 'title' || /<strong>/i.test(region.content);
+    const rawText = effectiveContent.replace(/<[^>]*>/g, '');
+    const isBold = region.type === 'title' || /<strong>/i.test(effectiveContent);
     const hasBreaks = rawText.includes('\n');
     // Use sanitizeFormattedText to preserve <strong>, <em>, etc. and render LaTeX
     // Pass inline_equations so {{EQ:N}} placeholders get replaced with rendered equations
     // For pre-wrap regions, keep \n as-is (browser renders them); otherwise convert to <br>
-    content = sanitizeFormattedText(region.content, {
+    content = sanitizeFormattedText(effectiveContent, {
       formulaDisplay: 'image',
-      inlineEquations: region.inline_equations,
+      inlineEquations: effectiveEquations,
     });
     if (!hasBreaks) content = content.replace(/\n/g, '<br>');
-    dataAttrs = ` data-raw-text="${escapeAttr(rawText)}" data-fit="true"${isBold ? ' data-bold="1"' : ''}${hasBreaks ? ' data-prewrap="1"' : ''}`;
+    dataAttrs = ` data-raw-text="${escapeAttr(rawText)}" data-fit="true"${isBold ? ' data-bold="1"' : ''}${hasBreaks ? ' data-prewrap="1"' : ''} data-font-family="${escapeAttr(quotedFamily)}"`;
+
 
     // Encode per-equation geometry for the fit script.
     // Each inline equation has a bbox and aspect ratio. The fit script uses
     // prepareWithSegments + layoutNextLine to flow text around equations,
     // reducing available width on lines where equation images appear.
-    if (region.inline_equations?.length) {
+    if (effectiveEquations?.length) {
       const eqData: Array<{ charOffset: number; aspectRatio: number; heightRatio: number }> = [];
-      for (const eq of region.inline_equations) {
+      for (const eq of effectiveEquations) {
         if (eq.bbox && eq.display !== 'block' && eq.line_bbox) {
           const eqW = eq.bbox[2] - eq.bbox[0];
           const eqH = eq.bbox[3] - eq.bbox[1];
@@ -172,7 +192,32 @@ function escapeAttr(text: string): string {
     .replace(/\n/g, '&#10;');
 }
 
-function buildDocument(title: string, pagesHtml: string): string {
+async function buildFontFaceRules(usedFonts: Record<string, string>): Promise<string> {
+  const mineruUrl = getMineruUrl();
+  const rules: string[] = [];
+  for (const [file, family] of Object.entries(usedFonts)) {
+    try {
+      const res = await fetch(`${mineruUrl}/fonts/${file}`);
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      const b64 = Buffer.from(buf).toString('base64');
+      const isBold = /bold/i.test(file);
+      const isItalic = /italic/i.test(file);
+      rules.push(`@font-face {
+  font-family: "${family}";
+  font-weight: ${isBold ? '700' : '400'};
+  font-style: ${isItalic ? 'italic' : 'normal'};
+  src: url(data:font/woff2;base64,${b64}) format("woff2");
+  font-display: block;
+}`);
+    } catch {
+      // Skip — region falls back to Inter
+    }
+  }
+  return rules.join('\n');
+}
+
+function buildDocument(title: string, pagesHtml: string, fontFaceCss: string = ''): string {
   const measureScript = getPretextBundle();
 
   return `<!DOCTYPE html>
@@ -181,6 +226,7 @@ function buildDocument(title: string, pagesHtml: string): string {
 <meta charset="UTF-8">
 <title>${escapeHtml(title)} — True Copy</title>
 <style>
+${fontFaceCss}
 ${getStyles()}
 </style>
 </head>
@@ -292,8 +338,11 @@ body {
 function getFitScript(): string {
   return `(function() {
   var LINE_HEIGHT_RATIO = 1.2;
-  var FONT_FAMILY = '"Inter", sans-serif';
+  var DEFAULT_FONT_FAMILY = "'Inter', sans-serif";
   var FLOOR = 1;
+  function getFontFamily(el) {
+    return el.getAttribute('data-font-family') || DEFAULT_FONT_FAMILY;
+  }
   var regions = document.querySelectorAll('[data-fit="true"]');
 
   /**
@@ -360,8 +409,8 @@ function getFitScript(): string {
 
   // Unified measurement at a given font size. Routes to the equation-aware
   // path when needed, otherwise the simple Pretext.prepare/layout path.
-  function measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo) {
-    var font = (isBold ? '600 ' : '') + size + 'px ' + FONT_FAMILY;
+  function measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo, fontFamily) {
+    var font = (isBold ? '600 ' : '') + size + 'px ' + fontFamily;
     var lineH = Math.round(size * LINE_HEIGHT_RATIO);
     if (lineH < 1) lineH = 1;
     if (hasEquations) {
@@ -378,7 +427,7 @@ function getFitScript(): string {
   // size. So the first candidate that fits in the descending ladder becomes
   // lo, and the previous (larger, failed) candidate becomes hi.
   // Falls back to FLOOR if even the smallest candidate doesn't fit.
-  function findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo) {
+  function findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo, fontFamily) {
     var ladder = [
       boxHeight * 4,
       boxHeight * 2,
@@ -400,7 +449,7 @@ function getFitScript(): string {
     var prevFailed = null;
     for (var j = 0; j < clean.length; j++) {
       var size = clean[j];
-      var h = measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo);
+      var h = measureAt(rawText, size, boxWidth, isBold, opts, hasEquations, eqInfo, fontFamily);
       if (h <= boxHeight) {
         var hi = prevFailed !== null ? prevFailed : size;
         return { lo: size, hi: hi };
@@ -425,9 +474,10 @@ function getFitScript(): string {
 
     var isBold = el.hasAttribute('data-bold');
     var opts = el.hasAttribute('data-prewrap') ? { whiteSpace: 'pre-wrap' } : undefined;
+    var fontFamily = getFontFamily(el);
 
     // Phase 1: probe ladder to discover dynamic [lo, hi] bounds.
-    var bounds = findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo);
+    var bounds = findFontBounds(rawText, boxWidth, boxHeight, isBold, opts, hasEquations, eqInfo, fontFamily);
     var lo = bounds.lo;
     var hi = bounds.hi;
     var bestSize = lo;
@@ -436,7 +486,7 @@ function getFitScript(): string {
     for (var iter = 0; iter < 20; iter++) {
       if (hi - lo < 0.5) break;
       var mid = (lo + hi) / 2;
-      var measuredHeight = measureAt(rawText, mid, boxWidth, isBold, opts, hasEquations, eqInfo);
+      var measuredHeight = measureAt(rawText, mid, boxWidth, isBold, opts, hasEquations, eqInfo, fontFamily);
       if (measuredHeight <= boxHeight) {
         bestSize = mid;
         lo = mid;

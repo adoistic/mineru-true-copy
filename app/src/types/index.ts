@@ -74,6 +74,15 @@ export interface MineruRegion {
   img_mime?: string; // MIME type (image/jpeg, image/png)
   level?: number; // Heading level 1-6 for title regions (set by heading correction)
   inline_equations?: Array<{latex: string; display: string; img_data?: string; img_mime?: string; bbox?: [number, number, number, number]; line_bbox?: [number, number, number, number]}>;
+  // Per-page (un-merged) variants for true-copy export.
+  // MinerU merges cross-page paragraphs for reading order, which stuffs
+  // continuation text into the earlier page's bbox. True-copy needs the
+  // per-page view so each region only holds what visually sits in its bbox.
+  // Normal HTML/markdown export ignores these and uses `content` as usual.
+  content_per_page?: string;
+  inline_equations_per_page?: Array<{latex: string; display: string; img_data?: string; img_mime?: string; bbox?: [number, number, number, number]; line_bbox?: [number, number, number, number]}>;
+  /** Font family name from bundled fonts (e.g. "Arimo", "Tinos"). True-copy only. */
+  font_family?: string;
   children?: MineruRegion[];
 }
 
@@ -90,6 +99,8 @@ export interface MineruOutput {
     total_pages: number;
     file_name: string;
   };
+  /** Map of bundled WOFF2 filename → CSS family name. Only fonts used in this document. */
+  used_fonts?: Record<string, string>;
 }
 
 export interface LLMCallOptions {
