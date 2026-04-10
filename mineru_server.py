@@ -1516,22 +1516,52 @@ class MineruHandler(BaseHTTPRequestHandler):
             self._send_json(200, safe_task)
             return
 
-        # GET /fonts/{filename} — serve bundled WOFF2 font files
+        # GET /fonts/{filename}[?format=ttf] — serve bundled font files
+        # Default: serve WOFF2 as-is. With ?format=ttf: convert via fontTools,
+        # cache in /tmp/mineru_fonts_ttf/ for subsequent requests.
         if parsed.path.startswith('/fonts/'):
+            from urllib.parse import parse_qs
+            query = parse_qs(parsed.query)
+            fmt = query.get('format', ['woff2'])[0].lower()
             filename = os.path.basename(parsed.path[len('/fonts/'):])
-            font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                     'lib', 'fonts', filename)
-            if not filename.endswith('.woff2') or not os.path.exists(font_path):
+            font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'lib', 'fonts')
+            woff2_path = os.path.join(font_dir, filename)
+            if not filename.endswith('.woff2') or not os.path.exists(woff2_path):
                 self._send_json(404, {'error': 'Font not found'})
                 return
-            with open(font_path, 'rb') as f:
-                data = f.read()
-            self.send_response(200)
-            self.send_header('Content-Type', 'font/woff2')
-            self.send_header('Content-Length', str(len(data)))
-            self.send_header('Cache-Control', 'public, max-age=31536000')
-            self.end_headers()
-            self.wfile.write(data)
+
+            if fmt == 'ttf':
+                ttf_cache_dir = os.path.join(tempfile.gettempdir(), 'mineru_fonts_ttf')
+                os.makedirs(ttf_cache_dir, exist_ok=True)
+                ttf_name = filename.replace('.woff2', '.ttf')
+                ttf_path = os.path.join(ttf_cache_dir, ttf_name)
+                if not os.path.exists(ttf_path):
+                    try:
+                        from fontTools.ttLib import TTFont
+                        font = TTFont(woff2_path)
+                        font.save(ttf_path)
+                        font.close()
+                    except Exception as e:
+                        self._send_json(500, {'error': f'TTF conversion failed: {e}'})
+                        return
+                with open(ttf_path, 'rb') as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'font/ttf')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', 'public, max-age=31536000')
+                self.end_headers()
+                self.wfile.write(data)
+            else:
+                with open(woff2_path, 'rb') as f:
+                    data = f.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'font/woff2')
+                self.send_header('Content-Length', str(len(data)))
+                self.send_header('Cache-Control', 'public, max-age=31536000')
+                self.end_headers()
+                self.wfile.write(data)
             return
 
         self._send_json(404, {'error': 'Not found'})
@@ -1840,6 +1870,12 @@ if __name__ == '__main__':
     # Write magic-pdf.json if --models-dir is provided
     if args.models_dir:
         _write_magic_pdf_config(args.models_dir)
+
+    # Clear stale TTF font cache from previous server runs
+    _ttf_cache = os.path.join(tempfile.gettempdir(), 'mineru_fonts_ttf')
+    if os.path.isdir(_ttf_cache):
+        import shutil
+        shutil.rmtree(_ttf_cache, ignore_errors=True)
 
     # Start HTTP server in a thread so we can respond to health checks during warm-up
     server = HTTPServer(('127.0.0.1', args.port), MineruHandler)

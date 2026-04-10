@@ -30,6 +30,17 @@ The only places where custom code is justified are:
 - Base64 image embedding (MinerU writes to disk, we need inline data)
 - Heading hierarchy heuristic (MinerU doesn't assign H1-H6)
 - VLM integration (replacing PaddleOCR with vision LLM, which MinerU itself supports via config)
+- Export format serializers (DOCX, PPTX, PDF — MinerU only outputs markdown/JSON)
+
+## Pretext Renderer Constraint (CRITICAL)
+
+All true-copy exports (HTML, DOCX, PPTX, PDF) use Pretext for font sizing via canvas measurement.
+Pretext requires a browser/canvas context. This means:
+- **All true-copy export code MUST run in the Tauri WebView renderer process** (Next.js frontend)
+- Do NOT move true-copy export logic to API routes or Node.js background workers
+- The `@chenglou/pretext` library uses `CanvasRenderingContext2D` internally — no canvas = no measurement
+- Fonts must be loaded via `@font-face` in the WebView before Pretext can measure with them
+- For future batch processing, `node-canvas` or similar would be needed (not yet implemented)
 
 Even in these cases, we are extending MinerU, not replacing it. If you find yourself writing
 regex to detect list items, numbered sections, or paragraph boundaries — STOP. MinerU already
