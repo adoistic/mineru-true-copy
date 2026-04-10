@@ -4,7 +4,7 @@ export type JobType = 'ocr' | 'extract' | 'heading_correction' | 'wizard' | 'tra
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'retrying' | 'permanently_failed';
 export type PipelineErrorType = 'mineru_crash' | 'llm_api_error' | 'rate_limited' | 'insufficient_credits' | 'key_expired' | 'partial_failure' | 'network_error';
 export type KeyStatus = 'active' | 'revoked' | 'expired';
-export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'true_copy_html' | 'zip';
+export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'true_copy_html' | 'true_copy_docx' | 'true_copy_pptx' | 'true_copy_pdf' | 'reflowed_docx' | 'reflowed_pdf' | 'zip';
 
 export interface Job {
   id: string;
