@@ -9,6 +9,7 @@ from mineru_server import (
     _unescape_markdown, _extract_block_content, _assign_heading_levels,
     _is_list_item, _detect_list_content, _is_decorative_sidebar,
     _is_decorative_block, _merge_overlapping_blocks,
+    _detect_margin_line_numbers, _strip_document_line_numbers,
 )
 from magic_pdf.config.ocr_content_type import ContentType
 
@@ -685,3 +686,240 @@ def test_unmerge_multiple_groups_same_page():
     p1_blocks = pdf_info[1]['para_blocks']
     assert p1_blocks[0]['lines'][0]['spans'][0]['content'] == 'Col-A cross.'
     assert p1_blocks[1]['lines'][0]['spans'][0]['content'] == 'Col-B cross.'
+
+
+# ============================================================================
+# Margin line number detection tests
+# ============================================================================
+
+class TestDetectMarginLineNumbers:
+    """Tests for block-level margin line number detection.
+
+    bioRxiv/arXiv PDFs print sequential line numbers in the left margin.
+    OCR merges these into body text: "1 Unstructured regions...".
+    The detector finds sequential leading numbers across a block.
+    """
+
+    def test_sequential_numbers_detected(self):
+        """Classic bioRxiv pattern: lines 1-5 with body text."""
+        entries = [
+            ('1 Unstructured regions differentially modulate', False),
+            ('2 the transcriptomic landscape of hippocampal', False),
+            ('3 neurons in an Alzheimer disease mouse model', False),
+            ('4 across spatial domains and biological sex', False),
+            ('5 Authors Name Here', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == {0, 1, 2, 3, 4}
+
+    def test_non_sequential_not_detected(self):
+        """Random leading numbers that aren't sequential → no stripping."""
+        entries = [
+            ('42 The answer to everything', False),
+            ('7 Lucky number paragraph', False),
+            ('99 Bottles of beer on the wall', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == set()
+
+    def test_too_few_lines_not_detected(self):
+        """Fewer than 3 candidate lines → no stripping (avoid false positives)."""
+        entries = [
+            ('1 Introduction paragraph text', False),
+            ('2 Methods paragraph text here', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == set()
+
+    def test_numbered_list_not_stripped(self):
+        """Lines with list markers (dot/paren after number) must NOT be stripped."""
+        entries = [
+            ('1. Introduction to the topic', False),
+            ('2. Methods and materials used', False),
+            ('3. Results of the experiment', False),
+            ('4. Discussion of the findings', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == set()
+
+    def test_parenthesized_numbers_not_stripped(self):
+        """(1), (2), (3) are list items, not line numbers."""
+        entries = [
+            ('(1) The Himalayan Mountains stretch', False),
+            ('(2) The Northern Plains are fertile', False),
+            ('(3) The Peninsular Plateau is ancient', False),
+            ('(4) The Indian Desert is arid land', False),
+        ]
+        # These don't match the bare-number pattern (start with '(')
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == set()
+
+    def test_mixed_lines_only_numbered_stripped(self):
+        """Block with some numbered and some non-numbered lines."""
+        entries = [
+            ('5 The hippocampus is a critical brain region', False),
+            ('6 involved in learning and memory processes', False),
+            ('7 that is particularly vulnerable to neurodegeneration', False),
+            ('in Alzheimer disease pathology across multiple', False),
+            ('8 spatial transcriptomic domains throughout the', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        # Lines 0-2 and 4 have sequential numbers (5,6,7,8); line 3 has no number
+        assert 0 in indices
+        assert 1 in indices
+        assert 2 in indices
+        assert 3 not in indices
+        assert 4 in indices
+
+    def test_line_numbers_with_gaps(self):
+        """Line numbers may skip (e.g., 10, 15, 20) in 5-line intervals."""
+        entries = [
+            ('10 First line of visible text here', False),
+            ('15 Second visible line of the body', False),
+            ('20 Third visible line of the text', False),
+            ('25 Fourth visible line appearing here', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == {0, 1, 2, 3}
+
+    def test_short_rest_text_not_stripped(self):
+        """If remaining text after number is <10 chars, skip (ambiguous)."""
+        entries = [
+            ('1 Short', False),
+            ('2 Also', False),
+            ('3 Tiny', False),
+        ]
+        indices = _detect_margin_line_numbers(entries)
+        assert indices == set()
+
+    def test_end_to_end_extraction_strips_line_numbers(self):
+        """Integration test: _extract_block_content strips line numbers."""
+        block = _make_block([
+            ['1 Unstructured regions differentially modulate the'],
+            ['2 transcriptomic landscape of hippocampal neurons in'],
+            ['3 an Alzheimer disease mouse model across spatial'],
+            ['4 domains and biological sex differences throughout'],
+            ['5 Authors Name and Affiliations Listed Here Below'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        # Line numbers should be stripped
+        assert not text.startswith('1 ')
+        assert 'Unstructured regions' in text
+        assert '2 transcriptomic' not in text
+        assert 'transcriptomic' in text
+
+    def test_end_to_end_preserves_normal_text(self):
+        """Normal text without line numbers must NOT be altered."""
+        block = _make_block([
+            ['The hippocampus is a critical brain region'],
+            ['involved in learning and memory processes'],
+            ['that is particularly vulnerable to disease'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        assert 'hippocampus' in text
+        assert 'learning and memory' in text
+
+    def test_end_to_end_preserves_list_items(self):
+        """Numbered list items must NOT be stripped by line number detection."""
+        block = _make_block([
+            ['1. Introduction to the research topic'],
+            ['2. Methods and materials used here now'],
+            ['3. Results of the experimental approach'],
+            ['4. Discussion of findings and implications'],
+        ])
+        text, _, _, _, _ = _extract_block_content(block)
+        assert '1.' in text
+        assert '2.' in text
+
+
+class TestStripDocumentLineNumbers:
+    """Tests for document-level margin line number stripping.
+
+    Simulates the post-processing pass in process_pdf() that strips
+    line numbers from ALL blocks when the document has margin numbering.
+    """
+
+    def _make_pages(self, blocks_per_page: list[list[dict]]) -> list[dict]:
+        """Build pages structure from lists of blocks."""
+        pages = []
+        for pi, blocks in enumerate(blocks_per_page):
+            pages.append({
+                'page_idx': pi,
+                'page_size': {'width': 612, 'height': 792},
+                'preproc_blocks': blocks,
+            })
+        return pages
+
+    def test_strips_line_numbers_across_pages(self):
+        """Document with margin line numbers: strip from all blocks."""
+        pages = self._make_pages([
+            [
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '1 Title of the Paper Here'},
+                {'type': 'text', 'bbox': [72, 200, 540, 400],
+                 'text': '23 Abstract text starts here and continues'},
+            ],
+            [
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '44 Introduction'},
+                {'type': 'text', 'bbox': [72, 200, 540, 600],
+                 'text': '50 Body paragraph with detailed content here'},
+                {'type': 'title', 'bbox': [72, 650, 540, 680], 'text': '87 Results'},
+            ],
+        ])
+        _strip_document_line_numbers(pages)
+
+        # All leading numbers should be stripped
+        assert pages[0]['preproc_blocks'][0]['text'] == 'Title of the Paper Here'
+        assert pages[0]['preproc_blocks'][1]['text'] == 'Abstract text starts here and continues'
+        assert pages[1]['preproc_blocks'][0]['text'] == 'Introduction'
+        assert pages[1]['preproc_blocks'][1]['text'] == 'Body paragraph with detailed content here'
+        assert pages[1]['preproc_blocks'][2]['text'] == 'Results'
+
+    def test_does_not_strip_without_enough_evidence(self):
+        """Document with <5 candidate blocks: no stripping."""
+        pages = self._make_pages([
+            [
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '1 Introduction'},
+                {'type': 'text', 'bbox': [72, 200, 540, 400],
+                 'text': 'Normal body text without line numbers.'},
+            ],
+        ])
+        _strip_document_line_numbers(pages)
+        # Title should NOT be stripped (only 1 candidate, need 5)
+        assert pages[0]['preproc_blocks'][0]['text'] == '1 Introduction'
+
+    def test_preserves_numbered_lists(self):
+        """Document with numbered list items should NOT be stripped."""
+        pages = self._make_pages([
+            [
+                {'type': 'text', 'bbox': [72, 100, 540, 130],
+                 'text': '1. First item in the numbered list'},
+                {'type': 'text', 'bbox': [72, 150, 540, 180],
+                 'text': '2. Second item in the numbered list'},
+                {'type': 'text', 'bbox': [72, 200, 540, 230],
+                 'text': '3. Third item in the numbered list'},
+                {'type': 'text', 'bbox': [72, 250, 540, 280],
+                 'text': '4. Fourth item in the numbered list'},
+                {'type': 'text', 'bbox': [72, 300, 540, 330],
+                 'text': '5. Fifth item in the numbered list'},
+            ],
+        ])
+        _strip_document_line_numbers(pages)
+        # List items with periods should NOT be stripped
+        assert pages[0]['preproc_blocks'][0]['text'] == '1. First item in the numbered list'
+
+    def test_strips_from_text_per_page_too(self):
+        """text_per_page field also gets stripped."""
+        pages = self._make_pages([
+            [
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '1 Title Text Here'},
+                {'type': 'text', 'bbox': [72, 200, 540, 400],
+                 'text': '23 Abstract of the paper here continuing',
+                 'text_per_page': '23 Abstract of the paper here continuing'},
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '44 Introduction'},
+                {'type': 'text', 'bbox': [72, 200, 540, 400],
+                 'text': '50 Body paragraph of the introduction here'},
+                {'type': 'title', 'bbox': [72, 100, 540, 130], 'text': '87 Results Section'},
+            ],
+        ])
+        _strip_document_line_numbers(pages)
+        assert pages[0]['preproc_blocks'][1]['text_per_page'] == 'Abstract of the paper here continuing'

@@ -627,8 +627,10 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         for _upage in _unmerged_info:
             _upi = _upage.get('page_idx', 0)
             _ublocks = _upage.get('para_blocks', _upage.get('preproc_blocks', []))
+            _upage_size = _upage.get('page_size', {})
+            _upage_w = _upage_size.get('width', 612) if isinstance(_upage_size, dict) else 612
             for _ubi, _ublock in enumerate(_ublocks):
-                _utext, _, _, _, _uineq = _extract_block_content(_ublock, img_dir)
+                _utext, _, _, _, _uineq = _extract_block_content(_ublock, img_dir, _upage_w)
                 _per_page_text_lookup[(_upi, _ubi)] = (_utext, _uineq)
         del _unmerged_info
         t3d = time.time()
@@ -709,7 +711,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 # NOTE: this reads MinerU's MERGED lines (cross-page paragraphs joined).
                 # The per-page un-merged version is looked up below and attached as
                 # `text_per_page` / `inline_equations_per_page` for true-copy export.
-                text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir)
+                text, table_html, img_path, latex, inline_equations = _extract_block_content(b, img_dir, width)
                 text_per_page, inline_equations_per_page = _per_page_text_lookup.get(
                     (page_idx, _bi), (text, inline_equations))
 
@@ -827,6 +829,14 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # normalised text appears on, and only keep text that is unique.
         _recover_discarded_blocks(pdf_info_raw, pages, img_dir, pdf_bytes, config)
 
+        # Document-level margin line number stripping.
+        # The block-level heuristic in _join_lines_for_html handles multi-line
+        # text blocks, but single-line title blocks like "23 Abstract" or
+        # "44 Introduction" need a document-wide pass. If ANY block in the
+        # document has detected sequential line numbers, we strip leading
+        # numbers from ALL blocks that match the pattern.
+        _strip_document_line_numbers(pages)
+
         # Scanned PDF font detection: sample blocks, run ResNet-18 classifier
         if _pdf_is_scanned and not _used_fonts:
             try:
@@ -929,8 +939,10 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
     # Phase 1: collect all discarded blocks across all pages
     all_discarded: list[tuple[int, dict, str]] = []  # (page_idx, block, text)
     for pi, raw_page in enumerate(pdf_info_raw):
+        _db_page_size = raw_page.get('page_size', {})
+        _db_page_w = _db_page_size.get('width', 612) if isinstance(_db_page_size, dict) else 612
         for db in raw_page.get('discarded_blocks', []):
-            db_text, _, _, _, _ = _extract_block_content(db, img_dir)
+            db_text, _, _, _, _ = _extract_block_content(db, img_dir, _db_page_w)
             text = db_text.strip() if db_text else ''
             all_discarded.append((pi, db, text))
 
@@ -1184,7 +1196,8 @@ def _is_decorative_sidebar(block: dict) -> bool:
     return _is_decorative_block(block, '', 612)
 
 
-def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, str, str, list]:
+def _extract_block_content(block: dict, img_dir: str = '',
+                           page_width: float = 612) -> tuple[str, str, str, str, list]:
     """Extract content from a para_block.
 
     Uses _join_lines_for_html() for ALL text/title/list/index blocks in the
@@ -1194,6 +1207,9 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
     MinerU's merge_para_with_text() is NOT used here — it joins lines with
     spaces (correct for markdown, wrong for HTML). The markdown export path
     uses merge_para_with_text() via pipe_result.get_markdown() separately.
+
+    Args:
+        page_width: Page width in PDF points, used for margin line number filtering.
 
     Returns: (text, table_html, img_path, latex, inline_equations)
     """
@@ -1224,7 +1240,7 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
 
     # Extract text: use _join_lines_for_html() for ALL blocks in the HTML pipeline
     if block_type in ('text', 'title', 'list', 'index') and block.get('lines'):
-        text, inline_equations = _join_lines_for_html(block, img_dir)
+        text, inline_equations = _join_lines_for_html(block, img_dir, page_width)
     elif block.get('text'):
         text = block['text']
     else:
@@ -1235,7 +1251,171 @@ def _extract_block_content(block: dict, img_dir: str = '') -> tuple[str, str, st
     return text, table_html, img_path, latex, inline_equations
 
 
-def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
+_LEADING_NUMBER_RE = _re.compile(r'^(\d{1,4})\s+(.*)', _re.DOTALL)
+
+
+def _detect_margin_line_numbers(line_entries: list[tuple[str, bool]]) -> set[int]:
+    """Detect which lines in a block have leading margin line numbers.
+
+    Academic papers (bioRxiv, arXiv, etc.) print sequential line numbers in
+    the left margin. OCR merges these into the body text as a leading number:
+    "1 Unstructured regions differentially...". Since OCR produces full-line
+    text strings (not per-character spans), span-level bbox filtering cannot
+    catch these. Instead we use a block-level heuristic:
+
+    1. Find lines starting with a bare 1-4 digit number followed by text
+    2. Check that the numbers form a roughly sequential progression
+    3. Require 3+ such lines (avoid false positives on short blocks)
+
+    Conservative: only strips when confident the pattern is margin numbering.
+    Won't trigger on numbered lists (those have . ) ] : after the number),
+    section headings (usually in separate title blocks), or prose that happens
+    to start with a number followed by short text.
+
+    Returns set of line indices whose leading numbers should be stripped.
+    """
+    candidates = []  # (line_idx, number, rest_text)
+    for i, (text, _) in enumerate(line_entries):
+        m = _LEADING_NUMBER_RE.match(text.strip())
+        if not m:
+            continue
+        rest = m.group(2)
+        # Skip if the number is followed by list/section markers — those are content
+        if rest and rest[0] in '.)]:\u2013\u2014':
+            continue
+        # Skip if remaining text is too short (could be a genuine number-only context)
+        if len(rest) < 10:
+            continue
+        # The rest should start with a letter or paren (body text), not another digit
+        if rest and not rest[0].isalpha() and rest[0] != '(':
+            continue
+        candidates.append((i, int(m.group(1))))
+
+    if len(candidates) < 3:
+        return set()
+
+    # Check if the numbers are roughly sequential (line numbers increment by 1-5,
+    # with possible gaps where lines were filtered or wrapped)
+    numbers = [n for _, n in candidates]
+    sequential_count = 0
+    for j in range(1, len(numbers)):
+        diff = numbers[j] - numbers[j - 1]
+        if 1 <= diff <= 10:  # allow gaps from wrapped lines / filtered content
+            sequential_count += 1
+
+    # Require majority of transitions to be sequential
+    if sequential_count < max(2, len(numbers) * 0.4):
+        return set()
+
+    return {i for i, _ in candidates}
+
+
+def _strip_document_line_numbers(pages: list[dict]) -> None:
+    """Document-level margin line number stripping.
+
+    Scans all blocks across all pages for the sequential-number pattern.
+    If detected (5+ lines with sequential leading numbers across the entire
+    document), strips leading numbers from ALL blocks that match — including
+    single-line title blocks that the block-level heuristic can't catch.
+
+    Mutates block['text'] and block['text_per_page'] in place.
+    """
+    # Phase 1: Collect all (number, block_ref) candidates across the document
+    all_candidates: list[tuple[int, dict]] = []  # (number, block_dict)
+    for page in pages:
+        for block in page.get('preproc_blocks', []):
+            text = block.get('text', '')
+            if not text or not text.strip():
+                continue
+            first_line = text.split('\n')[0].strip()
+            m = _LEADING_NUMBER_RE.match(first_line)
+            if not m:
+                continue
+            rest = m.group(2)
+            # Same guards as block-level detector: skip list patterns
+            if rest and rest[0] in '.)]:\u2013\u2014':
+                continue
+            # Strip leading HTML tags before checking the first character
+            rest_clean = _re.sub(r'^<[^>]*>', '', rest).strip()
+            if not rest_clean:
+                continue
+            # For document-level, we relax the min-rest-length for title blocks
+            # (e.g. "23 Abstract" has rest="Abstract" which is only 8 chars)
+            block_type = block.get('type', 'text')
+            min_rest = 5 if block_type == 'title' else 10
+            if len(rest_clean) < min_rest:
+                continue
+            if not rest_clean[0].isalpha() and rest_clean[0] != '(':
+                continue
+            all_candidates.append((int(m.group(1)), block))
+
+    if len(all_candidates) < 5:
+        return  # Not enough evidence for document-level line numbering
+
+    # Phase 2: Check that numbers are monotonically increasing.
+    # Document line numbers sampled across blocks have large gaps (1, 23, 44, 87...)
+    # because each block spans many lines. We just need most transitions to be
+    # increasing — that's the signature of line numbering vs random numbers.
+    numbers = [n for n, _ in all_candidates]
+    increasing_count = sum(1 for j in range(1, len(numbers)) if numbers[j] > numbers[j - 1])
+    total_transitions = len(numbers) - 1
+
+    # Require 60%+ of transitions to be increasing
+    if total_transitions < 4 or increasing_count < total_transitions * 0.6:
+        return  # Numbers aren't increasing enough to be line numbers
+
+    # Phase 3: Strip leading numbers from ALL blocks in the document
+    # (not just candidates — some blocks may have numbers mid-text from OCR
+    # merging adjacent lines). We strip from blocks whose first line matched
+    # as a candidate, and also do a more aggressive per-line strip within
+    # all text/title/list/index blocks.
+    candidate_blocks = {id(block) for _, block in all_candidates}
+    stripped_count = 0
+    for page in pages:
+        for block in page.get('preproc_blocks', []):
+            if block.get('type') not in ('text', 'title', 'list', 'index',
+                                          'caption', 'header', 'footer'):
+                continue
+            text = block.get('text', '')
+            if not text.strip():
+                continue
+            lines = text.split('\n')
+            new_lines = []
+            for line in lines:
+                m = _LEADING_NUMBER_RE.match(line.strip())
+                if m:
+                    rest = m.group(2)
+                    rest_clean = _re.sub(r'^<[^>]*>', '', rest).strip()
+                    if rest_clean and not (rest[0] in '.)]:\u2013\u2014'):
+                        new_lines.append(rest)
+                        stripped_count += 1
+                        continue
+                new_lines.append(line)
+            block['text'] = '\n'.join(new_lines)
+
+            # Also strip from per-page text if present
+            if 'text_per_page' in block:
+                pp_text = block['text_per_page']
+                pp_lines = pp_text.split('\n')
+                pp_new = []
+                for line in pp_lines:
+                    m2 = _LEADING_NUMBER_RE.match(line.strip())
+                    if m2:
+                        rest2 = m2.group(2)
+                        rest2_clean = _re.sub(r'^<[^>]*>', '', rest2).strip()
+                        if rest2_clean and not (rest2[0] in '.)]:\u2013\u2014'):
+                            pp_new.append(rest2)
+                            continue
+                    pp_new.append(line)
+                block['text_per_page'] = '\n'.join(pp_new)
+
+    if stripped_count > 0:
+        logger.info('Document-level line number stripping: removed %d leading numbers '
+                     'from %d blocks', stripped_count, len(all_candidates))
+
+
+def _join_lines_for_html(block: dict, img_dir: str = '',
+                         page_width: float = 612) -> tuple[str, list]:
     """Join block lines for HTML rendering, preserving line structure.
 
     Used for ALL text/title/list/index blocks in the HTML/JSON pipeline.
@@ -1247,6 +1427,10 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
     Lines without either signal are joined with spaces (paragraph flow)
     with dehyphenation. Equation spans become {{EQ:index}} placeholders
     carrying base64 image data.
+
+    Margin line numbers (bare digits in the left margin, e.g. bioRxiv)
+    are stripped using _detect_margin_line_numbers() which detects sequential
+    leading numbers across the block (block-level heuristic, not span-level).
 
     This is NOT a reimplementation of merge_para_with_text(). That function
     is for markdown output (used by get_markdown()). This function is for
@@ -1301,6 +1485,18 @@ def _join_lines_for_html(block: dict, img_dir: str = '') -> tuple[str, list]:
 
     if not line_entries:
         return '', []
+
+    # Strip margin line numbers (bioRxiv, arXiv, etc.) using block-level heuristic.
+    # Must happen BEFORE text assembly so list-item detection sees clean text.
+    strip_indices = _detect_margin_line_numbers(line_entries)
+    if strip_indices:
+        new_entries = []
+        for i, (text, is_list) in enumerate(line_entries):
+            if i in strip_indices:
+                text = _LEADING_NUMBER_RE.sub(r'\2', text.strip())
+            new_entries.append((text, is_list))
+        line_entries = new_entries
+        logger.debug('Stripped margin line numbers from %d lines', len(strip_indices))
 
     # Build final text using MinerU's geometric tags + content-based detection
     result = line_entries[0][0]

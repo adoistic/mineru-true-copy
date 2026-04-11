@@ -147,24 +147,64 @@ export async function createReflowedDocx(
 /**
  * Convert a MinerU region to reflowed DOCX elements.
  */
+/**
+ * Strip HTML and equation placeholders from content.
+ */
+function cleanContent(text: string): string {
+  return text
+    .replace(/<[^>]*>/g, '')
+    .replace(/\{\{EQ:\d+\}\}/g, '')
+    .trim();
+}
+
+/**
+ * Render equation images from a region's inline_equations array.
+ */
+function renderEquationImages(region: MineruRegion): Paragraph[] {
+  const equations = region.inline_equations || [];
+  const result: Paragraph[] = [];
+  for (const eq of equations) {
+    if (!eq.img_data || eq.display !== 'block') continue;
+    try {
+      const imgData = Buffer.from(eq.img_data, 'base64');
+      let w = 300;
+      let h = 40;
+      if (eq.bbox) {
+        w = Math.round((eq.bbox[2] - eq.bbox[0]) * 1.33); // pt to px approx
+        h = Math.round((eq.bbox[3] - eq.bbox[1]) * 1.33);
+      }
+      if (w > 600) { const s = 600 / w; w = 600; h = Math.round(h * s); }
+      result.push(new Paragraph({
+        alignment: AlignmentType.CENTER,
+        children: [new ImageRun({ data: imgData, transformation: { width: w, height: h }, type: 'jpg' })],
+        spacing: { before: 80, after: 80 },
+      }));
+    } catch { /* skip */ }
+  }
+  return result;
+}
+
 function renderReflowedRegion(
   region: MineruRegion,
   contentWidth_dxa: number,
 ): (Paragraph | Table)[] {
   const text = region.content || '';
-  if (!text.trim() && region.type !== 'figure' && region.type !== 'formula' && region.type !== 'table') {
+  if (!cleanContent(text) && region.type !== 'figure' && region.type !== 'formula' && region.type !== 'table') {
     return [];
   }
 
+  // Collect equation images for this region
+  const eqImages = renderEquationImages(region);
+
   switch (region.type) {
     case 'title':
-      return [renderHeading(text, region.level)];
+      return [renderHeading(text, region.level), ...eqImages];
 
     case 'text':
-      return renderTextParagraphs(text);
+      return [...renderTextParagraphs(text), ...eqImages];
 
     case 'list':
-      return renderList(text);
+      return [...renderList(text), ...eqImages];
 
     case 'table':
       if (region.table_html) {
@@ -194,16 +234,15 @@ function renderReflowedRegion(
 
 function renderHeading(text: string, level?: number): Paragraph {
   const headingLevel = HEADING_MAP[level || 1] || HeadingLevel.HEADING_1;
-  const cleanText = text.replace(/<[^>]*>/g, '').trim();
   return new Paragraph({
     heading: headingLevel,
-    children: [new TextRun({ text: cleanText })],
+    children: [new TextRun({ text: cleanContent(text) })],
   });
 }
 
 function renderTextParagraphs(text: string): Paragraph[] {
-  const cleanText = text.replace(/<[^>]*>/g, '');
-  const lines = cleanText.split('\n').filter(l => l.trim());
+  const cleaned = cleanContent(text);
+  const lines = cleaned.split('\n').filter(l => l.trim());
   if (lines.length === 0) return [];
 
   return lines.map(line => new Paragraph({
@@ -213,7 +252,7 @@ function renderTextParagraphs(text: string): Paragraph[] {
 }
 
 function renderList(text: string): Paragraph[] {
-  const cleanText = text.replace(/<[^>]*>/g, '');
+  const cleanText = cleanContent(text);
   const lines = cleanText.split('\n').filter(l => l.trim());
 
   return lines.map(line => {

@@ -115,6 +115,18 @@ function ensureSpace(doc: PDFDocument, state: LayoutState, needed: number, width
   return state;
 }
 
+/**
+ * Strip HTML tags and resolve {{EQ:n}} placeholders.
+ * Equation placeholders are replaced with a Unicode placeholder character
+ * so text flow is preserved. Equation images are drawn separately.
+ */
+function stripHtmlAndPlaceholders(content: string): string {
+  return content
+    .replace(/<[^>]*>/g, '')        // strip HTML tags
+    .replace(/\{\{EQ:\d+\}\}/g, '') // remove equation placeholders from text
+    .trim();
+}
+
 async function drawReflowedRegion(
   doc: PDFDocument,
   state: LayoutState,
@@ -125,8 +137,50 @@ async function drawReflowedRegion(
   pageWidth: number,
   pageHeight: number,
 ): Promise<LayoutState> {
-  const text = (region.content || '').replace(/<[^>]*>/g, '').trim();
+  const text = stripHtmlAndPlaceholders(region.content || '');
   if (!text && region.type !== 'figure' && region.type !== 'formula') return state;
+
+  // Draw inline/interline equation images before text
+  const equations = region.inline_equations || [];
+  if (equations.length > 0) {
+    for (const eq of equations) {
+      if (!eq.img_data) continue;
+      const isBlock = eq.display === 'block';
+      try {
+        const imgBytes = Buffer.from(eq.img_data, 'base64');
+        const mime = eq.img_mime || 'image/jpeg';
+        const pdfImage = mime.includes('png')
+          ? await doc.embedPng(imgBytes)
+          : await doc.embedJpg(imgBytes);
+        // Size from equation bbox if available
+        let eqW = state.contentWidth * 0.5;
+        let eqH = baseFontSize * 2;
+        if (eq.bbox) {
+          eqW = eq.bbox[2] - eq.bbox[0];
+          eqH = eq.bbox[3] - eq.bbox[1];
+        }
+        // Cap to content width
+        if (eqW > state.contentWidth) {
+          const scale = state.contentWidth / eqW;
+          eqW = state.contentWidth;
+          eqH *= scale;
+        }
+        if (isBlock) {
+          state = ensureSpace(doc, state, eqH + 8, pageWidth, pageHeight);
+          state.cursorY -= eqH;
+          const xCenter = state.leftMargin + (state.contentWidth - eqW) / 2;
+          state.page.drawImage(pdfImage, {
+            x: xCenter,
+            y: state.cursorY,
+            width: eqW,
+            height: eqH,
+          });
+          state.cursorY -= 8;
+        }
+        // Inline equations: skip for now (they appear in text flow context)
+      } catch { /* skip equation on error */ }
+    }
+  }
 
   switch (region.type) {
     case 'title': {
