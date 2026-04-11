@@ -90,11 +90,7 @@ def discover_scanned_fonts(fitz_doc, sample_blocks: list[tuple[int, list]],
             pass
 
     # Map each detected name to a bundled file
-    # Import here to avoid circular dependency
-    import sys
-    import os
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from mineru_server import _map_font_name
+    from lib.font_utils import map_font_name as _map_font_name
 
     results: dict[str, str] = {}
     for name in detected:

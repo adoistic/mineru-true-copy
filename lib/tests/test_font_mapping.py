@@ -4,12 +4,12 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from mineru_server import (
-    _normalize_font_name,
-    _map_font_name,
-    _dominant_font_for_block,
+from lib.font_utils import (
+    normalize_font_name as _normalize_font_name,
+    map_font_name as _map_font_name,
     _FONT_MAP,
 )
+from mineru_server import _dominant_font_for_block
 
 
 # ── Normalization ──
