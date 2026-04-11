@@ -334,12 +334,23 @@ def _dominant_font_for_block(page_spans: list, block_bbox: list) -> str | None:
     return max(char_counts.items(), key=lambda kv: kv[1])[0]
 
 
+_cleanup_lock = threading.Lock()
+
+
 def _cleanup_task(task_id: str, *, remove_from_store: bool = False):
     """Free heavy resources for a task, keeping lightweight metadata.
 
     Called by DELETE endpoint (client-triggered) and auto-cleanup thread.
     Frees _pdf_bytes, _pipe_result, result, and _img_dir on disk.
+    Thread-safe: guarded by _cleanup_lock to prevent double-free between
+    the DELETE handler and the auto-cleanup daemon.
     """
+    with _cleanup_lock:
+        _cleanup_task_unlocked(task_id, remove_from_store=remove_from_store)
+
+
+def _cleanup_task_unlocked(task_id: str, *, remove_from_store: bool = False):
+    """Inner cleanup logic (must be called under _cleanup_lock)."""
     task = tasks.get(task_id)
     if not task:
         return
@@ -2005,9 +2016,13 @@ def _write_magic_pdf_config(models_dir: str):
 
 
 def _auto_cleanup_loop():
-    """Background thread: clean up stale completed/failed tasks every 60s."""
-    CLEANUP_INTERVAL = 60
-    STALE_AGE_SECONDS = 600  # 10 minutes
+    """Background thread: clean up stale completed/failed tasks.
+
+    Tightened from 60s/10min to 30s/2min because batch jobs create many temp
+    dirs in rapid succession and the 10min window held ~900MB of idle data.
+    """
+    CLEANUP_INTERVAL = 30
+    STALE_AGE_SECONDS = 120  # 2 minutes
 
     while True:
         time.sleep(CLEANUP_INTERVAL)
