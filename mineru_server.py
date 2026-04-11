@@ -129,6 +129,56 @@ def _setup_logging() -> logging.Logger:
 # Module-level logger — configured properly in __main__, usable at import time
 logger = logging.getLogger('mineru')
 
+
+def _sweep_orphan_tempdirs():
+    """Remove leftover mineru_task_* directories from previous server runs.
+
+    Called once at startup. If the server was kill -9'd or the laptop crashed,
+    in-flight task tempdirs leak forever (each holds 50-200MB of cropped images).
+    Uses a PID file to avoid sweeping dirs owned by another running instance.
+    """
+    import glob
+    import shutil
+
+    tmpdir = tempfile.gettempdir()
+    pid_file = os.path.join(tmpdir, 'mineru_server.pid')
+
+    # Check if another instance is running via PID file
+    if os.path.exists(pid_file):
+        try:
+            with open(pid_file) as f:
+                old_pid = int(f.read().strip())
+            # Check if that PID is still alive
+            try:
+                os.kill(old_pid, 0)  # signal 0 = existence check
+                logger.warning('Another MinerU server is running (PID %d), skipping orphan sweep',
+                               old_pid)
+                return
+            except OSError:
+                pass  # PID is dead, safe to sweep
+        except (ValueError, OSError):
+            pass  # corrupt PID file, ignore
+
+    # Write our PID
+    try:
+        with open(pid_file, 'w') as f:
+            f.write(str(os.getpid()))
+    except OSError as e:
+        logger.warning('Could not write PID file: %s', e)
+
+    # Sweep orphaned task directories
+    pattern = os.path.join(tmpdir, 'mineru_task_*')
+    orphans = glob.glob(pattern)
+    if orphans:
+        for orphan in orphans:
+            try:
+                shutil.rmtree(orphan, ignore_errors=True)
+                logger.info('Swept orphan tempdir: %s', orphan)
+            except Exception as e:
+                logger.warning('Failed to sweep orphan %s: %s', orphan, e)
+        logger.info('Startup sweep: removed %d orphaned tempdirs', len(orphans))
+
+
 # MinerU imports
 from magic_pdf.data.dataset import PymuDocDataset
 from magic_pdf.model.doc_analyze_by_custom_model import doc_analyze
@@ -543,7 +593,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
 
         # Step 2: Run full pipeline (paragraph merging, heading detection,
         # table extraction, reading order, image extraction)
-        tmpdir = tempfile.mkdtemp(prefix='mineru_')
+        tmpdir = tempfile.mkdtemp(prefix='mineru_task_')
         img_dir = os.path.join(tmpdir, 'images')
         image_writer = FileBasedDataWriter(img_dir)
         pipe_result = infer_result.pipe_ocr_mode(
@@ -1995,6 +2045,9 @@ if __name__ == '__main__':
     # Redirect native stdout/stderr (torch, MinerU, PaddleOCR prints) through logger
     sys.stdout = StreamToLogger(logger, logging.INFO)
     sys.stderr = StreamToLogger(logger, logging.WARNING)
+
+    # Sweep orphaned task directories from previous runs (before serving requests)
+    _sweep_orphan_tempdirs()
 
     # Write magic-pdf.json if --models-dir is provided
     if args.models_dir:
