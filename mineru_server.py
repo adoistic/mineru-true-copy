@@ -1685,6 +1685,10 @@ class MineruHandler(BaseHTTPRequestHandler):
             font_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                     'lib', 'fonts')
             woff2_path = os.path.join(font_dir, filename)
+            # Path traversal defense: ensure resolved path stays inside font_dir
+            if not os.path.realpath(woff2_path).startswith(os.path.realpath(font_dir)):
+                self._send_json(404, {'error': 'Font not found'})
+                return
             if not filename.endswith('.woff2') or not os.path.exists(woff2_path):
                 self._send_json(404, {'error': 'Font not found'})
                 return

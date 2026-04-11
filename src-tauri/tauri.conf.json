@@ -5,7 +5,7 @@
   "identifier": "com.doctransform.app",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:60917",
+    "devUrl": "http://localhost:62874",
     "beforeBuildCommand": "cd app && npm run build",
     "frontendDist": "splash.html"
   },
@@ -36,7 +36,7 @@
       "icons/icon.png"
     ],
     "externalBin": [],
-    "resources": []
+    "resources": ["../lib/fonts/font_classifier.onnx"]
   },
   "plugins": {
     "shell": {
