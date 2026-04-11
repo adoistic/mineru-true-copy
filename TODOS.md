@@ -311,3 +311,56 @@ structural fix should land before the next batch run.
 
 **Depends on:** Nothing
 **Blocked by:** Nothing
+
+---
+
+### TODO 20: Extract mineru_server.py into Modules
+**Priority:** Medium (after W1+W2 ship)
+**Effort:** human ~2 days / CC ~30 min
+
+**What:** Split `mineru_server.py` (1934 lines, 43 functions, 6-7 mixed responsibilities) into
+focused modules: `server.py` (HTTP handlers), `cleanup.py` (task lifecycle, eviction, auto-cleanup),
+`processing.py` (process_pdf, block extraction, line joining), `fonts.py` (font discovery, mapping).
+
+**Why:** Every feature added to the god module makes future changes harder and increases merge
+conflict risk. Both the batch-safe server (W1) and font classifier (W2) workstreams added more
+code to it. The outside voice flagged this as compounding technical debt.
+
+**Pros:** Clearer ownership boundaries, easier testing, less merge conflict risk, each module
+can be read and understood independently.
+
+**Cons:** Large diff, need to update all imports (tests, lib/font_classifier.py), risk of
+breaking in-flight work if done during an active development phase.
+
+**Context:** The CEO plan (2026-04-11) explicitly deferred this ("Fix first, modularize later").
+The eng review outside voice reinforced it as compounding debt. Best done in a quiet period
+between feature batches, not alongside active feature work.
+
+**Depends on:** W1 + W2 shipped and stable
+**Blocked by:** Nothing
+
+---
+
+### TODO 21: Memory-Aware Upload Limits
+**Priority:** Low
+**Effort:** human ~1 day / CC ~15 min
+
+**What:** Connect the 500MB max upload limit to available system memory and concurrent OCR slots.
+Currently `_calc_ocr_slots()` considers RAM for concurrency but the upload limit is a flat 500MB
+regardless of system state.
+
+**Why:** A 500MB PDF can consume 4-8GB RAM during processing (rasterization, inference tensors,
+image crops). With 4 concurrent slots, accepting four 500MB PDFs simultaneously could exhaust
+memory on a 16GB machine.
+
+**Pros:** Prevents OOM during batch processing of large documents. Smarter resource allocation.
+
+**Cons:** Adds complexity to upload handling. Hard to predict exact memory usage before processing.
+May reject valid uploads on low-memory machines.
+
+**Context:** Flagged by eng review outside voice (2026-04-11). The flat 500MB limit catches the
+worst case (multi-GB PDFs) but doesn't account for concurrent load. Real-world PDFs are rarely
+>200MB so this is low priority.
+
+**Depends on:** W1 shipped (max upload check exists)
+**Blocked by:** Nothing
