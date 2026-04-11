@@ -568,6 +568,22 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
     _parse_semaphore.acquire()
     acquired = True
     try:
+        # Disk-space pre-flight: reject if < 2GB free to prevent the error-spam
+        # feedback loop that crashed the laptop (6.7GB log from failed writes)
+        import shutil as _shutil_check
+        free_bytes = _shutil_check.disk_usage(tempfile.gettempdir()).free
+        MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
+        if free_bytes < MIN_FREE_BYTES:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['_completed_at'] = time.time()
+            tasks[task_id]['error'] = (
+                f'Insufficient disk space: {free_bytes / (1024**3):.1f}GB free, '
+                f'need at least 2GB'
+            )
+            logger.error('Insufficient disk space: %.1fGB free, need 2GB',
+                         free_bytes / (1024**3), extra={'task_id': task_id})
+            return
+
         tasks[task_id]['status'] = 'processing'
         t_start = time.time()
         config = config or {}
@@ -1867,6 +1883,13 @@ class MineruHandler(BaseHTTPRequestHandler):
             return
 
         content_length = int(self.headers.get('Content-Length', 0))
+
+        # Reject uploads > 500MB
+        MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500MB
+        if content_length > MAX_UPLOAD_BYTES:
+            self._send_json(413, {'error': f'Payload too large ({content_length} bytes). Max: {MAX_UPLOAD_BYTES} bytes (500MB)'})
+            return
+
         body = self.rfile.read(content_length)
 
         # Extract file from multipart
@@ -1985,8 +2008,8 @@ def _pre_warm_models():
 
     except Exception as e:
         logger.error('Pre-warm failed: %s', e, extra={'error': str(e)})
-        # Still mark as ok — models will load on first real request
-        _server_status = 'ok'
+        _server_status = 'failed'
+        sys.exit(1)
 
 
 def _write_magic_pdf_config(models_dir: str):
