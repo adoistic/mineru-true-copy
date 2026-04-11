@@ -38,7 +38,10 @@ inspect.findsource = _safe_findsource
 import argparse
 import lib.patch_mineru  # noqa: F401
 import json
+import logging
+import logging.handlers
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -46,6 +49,85 @@ import traceback
 import uuid
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
+
+
+# ---------------------------------------------------------------------------
+# Structured JSON logging
+# ---------------------------------------------------------------------------
+
+class JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log line for structured log consumption."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry: dict = {
+            'ts': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime(record.created)),
+            'level': record.levelname,
+            'task_id': getattr(record, 'task_id', None),
+            'page_idx': getattr(record, 'page_idx', None),
+            'msg': record.getMessage(),
+        }
+        for key in ('rss_mb', 'duration_ms', 'error'):
+            val = getattr(record, key, None)
+            if val is not None:
+                entry[key] = val
+        return json.dumps(entry, default=str)
+
+
+class StreamToLogger:
+    """Redirect stdout/stderr through the logging system so native C/torch
+    prints are also subject to rotation and level gating."""
+
+    def __init__(self, logger: logging.Logger, level: int = logging.INFO):
+        self._logger = logger
+        self._level = level
+        self._buf = ''
+
+    def write(self, msg: str) -> None:
+        if msg and msg.strip():
+            for line in msg.rstrip('\n').split('\n'):
+                self._logger.log(self._level, line)
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+
+def _setup_logging() -> logging.Logger:
+    """Configure the 'mineru' logger with RotatingFileHandler + JSON format.
+
+    Falls back to stderr if the file handler can't be created (PermissionError).
+    Respects LOG_LEVEL env var (default: INFO).
+    """
+    log_level_name = os.environ.get('LOG_LEVEL', 'INFO').upper()
+    log_level = getattr(logging, log_level_name, logging.INFO)
+
+    logger = logging.getLogger('mineru')
+    logger.setLevel(log_level)
+    logger.propagate = False
+    # Prevent logging errors from triggering more logging (breaks the crash loop)
+    logging.raiseExceptions = False
+
+    formatter = JsonFormatter()
+
+    log_path = os.path.join(tempfile.gettempdir(), 'mineru_server.log')
+    try:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_path, maxBytes=50 * 1024 * 1024, backupCount=3,
+        )
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    except (PermissionError, OSError):
+        stderr_handler = logging.StreamHandler(sys.stderr)
+        stderr_handler.setFormatter(formatter)
+        logger.addHandler(stderr_handler)
+
+    return logger
+
+
+# Module-level logger — configured properly in __main__, usable at import time
+logger = logging.getLogger('mineru')
 
 # MinerU imports
 from magic_pdf.data.dataset import PymuDocDataset
@@ -83,10 +165,10 @@ def _crop_and_embed(bbox, page_idx, fitz_page, img_dir: str, pdf_md5: str,
             img_mime = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
             return {'img_path': img_path, 'img_data': img_data, 'img_mime': img_mime}
         else:
-            print(f'[MinerU Server] WARNING: Cropped image not found: {img_full_path}')
+            logger.warning('Cropped image not found: %s', img_full_path)
             return None
     except Exception as e:
-        print(f'[MinerU Server] Failed to crop {label} on page {page_idx}: {e}')
+        logger.warning('Failed to crop %s on page %d: %s', label, page_idx, e)
         return None
 
 
@@ -119,7 +201,7 @@ try:
     with open(_FONT_MAP_PATH) as _f:
         _FONT_MAP: dict = {k: v for k, v in json.load(_f).items() if not k.startswith('_')}
 except FileNotFoundError:
-    print(f'[MinerU Server] WARNING: font_map.json not found at {_FONT_MAP_PATH}')
+    logger.warning('font_map.json not found at %s', _FONT_MAP_PATH)
     _FONT_MAP = {}
 
 
@@ -251,9 +333,11 @@ def _cleanup_task(task_id: str, *, remove_from_store: bool = False):
         try:
             import psutil
             rss_mb = psutil.Process().memory_info().rss / (1024 * 1024)
-            print(f'[MinerU Server] Cleaned task {task_id}: freed {freed}, RSS={rss_mb:.0f}MB')
+            logger.info('Cleaned task %s: freed %s, RSS=%.0fMB', task_id, freed, rss_mb,
+                        extra={'task_id': task_id, 'rss_mb': round(rss_mb)})
         except ImportError:
-            print(f'[MinerU Server] Cleaned task {task_id}: freed {freed}')
+            logger.info('Cleaned task %s: freed %s', task_id, freed,
+                        extra={'task_id': task_id})
 
 
 def _evict_old_tasks():
@@ -261,7 +345,8 @@ def _evict_old_tasks():
     while len(tasks) > MAX_TASKS:
         oldest_id = next(iter(tasks))
         _cleanup_task(oldest_id, remove_from_store=True)
-        print(f'[MinerU Server] Evicted task {oldest_id} ({len(tasks)} remaining)')
+        logger.info('Evicted task %s (%d remaining)', oldest_id, len(tasks),
+                    extra={'task_id': oldest_id})
 
 # Dynamic concurrency based on system memory
 # ~3GB base for models, ~2GB per concurrent OCR job, reserve 4GB for OS
@@ -272,7 +357,7 @@ def _calc_ocr_slots():
     # (inference tensors + rasterized pages + base64 images + output buffers)
     slots = max(1, int((total_gb - 4 - 3) / 4))
     # No artificial cap — let memory be the only constraint
-    print(f"[MinerU] System RAM: {total_gb:.0f}GB → OCR concurrency: {slots}")
+    logger.info('System RAM: %.0fGB, OCR concurrency: %d', total_gb, slots)
     return slots
 
 _max_ocr_concurrent = _calc_ocr_slots()
@@ -324,7 +409,7 @@ def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
                     continue  # already has an image
                 bbox = span.get('bbox')
                 if not bbox or bbox[0] >= bbox[2] or bbox[1] >= bbox[3]:
-                    print(f'[MinerU Server] Skipping equation span on page {page_idx}: invalid bbox={bbox}')
+                    logger.debug('Skipping equation span on page %d: invalid bbox=%s', page_idx, bbox)
                     continue
 
                 return_path = join_path(pdf_md5, 'equations')
@@ -337,14 +422,14 @@ def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
                     span['image_path'] = img_path
                     cropped += 1
                 except Exception as crop_err:
-                    print(f'[MinerU Server] Failed to crop equation on page {page_idx}: {crop_err}')
+                    logger.warning('Failed to crop equation on page %d: %s', page_idx, crop_err)
 
             if span_types_found:
-                print(f'[MinerU Server] Page {page_idx} span types: {span_types_found}')
+                logger.debug('Page %d span types: %s', page_idx, span_types_found)
     finally:
         doc.close()
 
-    print(f'[MinerU Server] Equation image cropping: {cropped} cropped')
+    logger.info('Equation image cropping: %d cropped', cropped)
 
 
 def _unmerge_cross_page_blocks(pdf_info: list) -> None:
@@ -410,8 +495,8 @@ def _unmerge_cross_page_blocks(pdf_info: list) -> None:
                 pending.append(cross_lines)
 
     if pending:
-        print(f'[MinerU Server] WARNING: {len(pending)} cross_page line groups '
-              f'had no destination block — text may be truncated for those paragraphs.')
+        logger.warning('%d cross_page line groups had no destination block — text may be truncated',
+                       len(pending))
 
 
 def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | None = None):
@@ -451,9 +536,10 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         if not table_enable:
             skipped.append('table structure recognition')
         if skipped:
-            print(f'[MinerU Server] Skipped: {", ".join(skipped)}')
+            logger.info('Skipped: %s', ', '.join(skipped), extra={'task_id': task_id})
         t2 = time.time()
-        print(f'[MinerU Server] Step 1 (model inference): {t2-t1:.1f}s')
+        logger.info('Step 1 (model inference): %.1fs', t2 - t1,
+                    extra={'task_id': task_id, 'duration_ms': round((t2 - t1) * 1000)})
 
         # Step 2: Run full pipeline (paragraph merging, heading detection,
         # table extraction, reading order, image extraction)
@@ -464,19 +550,22 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             image_writer, debug_mode=True, lang='en'
         )
         t3 = time.time()
-        print(f'[MinerU Server] Step 2 (pipe_ocr_mode): {t3-t2:.1f}s')
+        logger.info('Step 2 (pipe_ocr_mode): %.1fs', t3 - t2,
+                    extra={'task_id': task_id, 'duration_ms': round((t3 - t2) * 1000)})
 
         # Step 2b: Crop equation images (MinerU only crops images + tables)
         raw = pipe_result._pipe_res
         pdf_info_raw = raw.get('pdf_info', [])
         _crop_equation_images(pdf_bytes, pdf_info_raw, image_writer)
         t3b = time.time()
-        print(f'[MinerU Server] Step 2b (equation crops): {t3b-t3:.1f}s')
+        logger.info('Step 2b (equation crops): %.1fs', t3b - t3,
+                    extra={'task_id': task_id, 'duration_ms': round((t3b - t3) * 1000)})
 
         # Step 2c: Assign heading hierarchy (H1-H6) to title blocks
         _assign_heading_levels(pdf_info_raw)
         t3c = time.time()
-        print(f'[MinerU Server] Step 2c (heading hierarchy): {t3c-t3b:.1f}s')
+        logger.info('Step 2c (heading hierarchy): %.1fs', t3c - t3b,
+                    extra={'task_id': task_id, 'duration_ms': round((t3c - t3b) * 1000)})
 
         # Step 2d: Build a PARALLEL per-page-fidelity view for true-copy export.
         # MinerU's para_split_v3 merges text across page boundaries (moves lines
@@ -504,7 +593,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 _per_page_text_lookup[(_upi, _ubi)] = (_utext, _uineq)
         del _unmerged_info
         t3d = time.time()
-        print(f'[MinerU Server] Step 2d (per-page un-merge view): {t3d-t3c:.1f}s')
+        logger.info('Step 2d (per-page un-merge view): %.1fs', t3d - t3c,
+                    extra={'task_id': task_id, 'duration_ms': round((t3d - t3c) * 1000)})
 
         # Step 3: Convert pipeline output to the format the client expects
         # img_dir is where MinerU wrote extracted images
@@ -532,13 +622,14 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                     if bundled:
                         _used_fonts[bundled] = family
                 t3e = time.time()
-                print(f'[MinerU Server] Step 2e (font discovery): {t3e-t3d:.1f}s, '
-                      f'{total_spans} spans, {len(_used_fonts)} unique fonts mapped')
+                logger.info('Step 2e (font discovery): %.1fs, %d spans, %d unique fonts mapped',
+                            t3e - t3d, total_spans, len(_used_fonts),
+                            extra={'task_id': task_id, 'duration_ms': round((t3e - t3d) * 1000)})
             else:
                 _pdf_is_scanned = True
                 t3e = time.time()
-                print(f'[MinerU Server] Step 2e: no text spans found — '
-                      f'PDF is scanned, will use ResNet-18 classifier')
+                logger.info('Step 2e: no text spans found — PDF is scanned, will use classifier',
+                            extra={'task_id': task_id})
 
         pages = []
         for page in pdf_info_raw:
@@ -562,7 +653,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             for b in para_blocks:
                 bt = b.get('type', 'unknown')
                 block_types[bt] = block_types.get(bt, 0) + 1
-            print(f'[MinerU Server] Page {page_idx}: block types = {block_types}')
+            logger.debug('Page %d: block types = %s', page_idx, block_types)
 
             blocks = []
             for _bi, b in enumerate(para_blocks):
@@ -571,8 +662,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
 
                 # Debug: log image/figure blocks
                 if block_type in ('image', 'image_body', 'figure'):
-                    print(f'[MinerU Server] Page {page_idx}: Found {block_type} block, '
-                          f'keys={list(b.keys())}, has blocks={bool(b.get("blocks"))}')
+                    logger.debug('Page %d: Found %s block, keys=%s, has blocks=%s',
+                                page_idx, block_type, list(b.keys()), bool(b.get('blocks')))
 
                 # Extract content from the nested structure:
                 # para_block may have direct lines/spans OR nested blocks[].lines[].spans[]
@@ -600,8 +691,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                         block_type = 'image'
                         img_path = crop['img_path']
                         text = ''
-                        print(f'[MinerU Server] Page {page_idx}: sidebar→image '
-                              f'bbox={[round(x, 1) for x in bbox]}')
+                        logger.debug('Page %d: sidebar→image bbox=%s',
+                                    page_idx, [round(x, 1) for x in bbox])
 
                 # Per-block font assignment
                 font_family = None
@@ -657,7 +748,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                         ext = os.path.splitext(img_path)[1].lower()
                         block['img_mime'] = 'image/jpeg' if ext in ('.jpg', '.jpeg') else 'image/png'
                     else:
-                        print(f'[MinerU Server] WARNING: Image file not found: {img_full_path}')
+                        logger.warning('Image file not found: %s', img_full_path)
 
                 # Fallback crop: figure/image blocks without img_data — crop from PDF
                 if (block_type in ('image', 'image_body', 'figure')
@@ -668,8 +759,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                                            img_dir, _pdf_md5, 'figure_crop')
                     if crop:
                         block.update(crop)
-                        print(f'[MinerU Server] Page {page_idx}: fallback crop for {block_type} '
-                              f'bbox={[round(x, 1) for x in bbox]}')
+                        logger.debug('Page %d: fallback crop for %s bbox=%s',
+                                    page_idx, block_type, [round(x, 1) for x in bbox])
 
                 blocks.append(block)
 
@@ -718,13 +809,14 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                                                          'index', 'caption')
                                         and 'font_family' not in blk):
                                     blk['font_family'] = dominant_family
-                    print(f'[MinerU Server] Scanned font detection: '
-                          f'{len(_used_fonts)} fonts detected')
+                    logger.info('Scanned font detection: %d fonts detected',
+                                len(_used_fonts), extra={'task_id': task_id})
             except ImportError:
-                print('[MinerU Server] font_classifier not available, '
-                      'skipping scanned font detection')
+                logger.info('font_classifier not available, skipping scanned font detection',
+                            extra={'task_id': task_id})
             except Exception as e:
-                print(f'[MinerU Server] Scanned font detection failed: {e}')
+                logger.warning('Scanned font detection failed: %s', e,
+                               extra={'task_id': task_id})
 
         _fitz_doc.close()
 
@@ -750,19 +842,20 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         gc.collect()
 
         total_blocks = sum(len(p['preproc_blocks']) for p in pages)
-        print(f'[MinerU Server] Task {task_id} completed: '
-              f'{len(pages)} pages, {total_blocks} blocks')
+        logger.info('Task %s completed: %d pages, %d blocks', task_id, len(pages), total_blocks,
+                    extra={'task_id': task_id})
 
     except Exception as e:
         tb_str = traceback.format_exc()
-        print(tb_str)
+        logger.error('Task %s exception:\n%s', task_id, tb_str,
+                     extra={'task_id': task_id, 'error': str(e)})
         tasks[task_id]['status'] = 'failed'
         tasks[task_id]['_completed_at'] = time.time()
         # Include traceback location in the error for client-side debugging
         tb_lines = tb_str.strip().split('\n')
         location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
         tasks[task_id]['error'] = f'{e} | at: {location}'
-        print(f'[MinerU Server] Task {task_id} failed: {e}')
+        logger.error('Task %s failed: %s', task_id, e, extra={'task_id': task_id})
     finally:
         # Ensure fitz doc is closed even on error (may already be closed on success path)
         try:
@@ -833,7 +926,7 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
             fitz_doc = fitz.open(stream=pdf_bytes, filetype='pdf')
             discard_pdf_md5 = hashlib.md5(pdf_bytes).hexdigest()
         except Exception as e:
-            print(f'[MinerU Server] Could not open PDF for discarded block cropping: {e}')
+            logger.warning('Could not open PDF for discarded block cropping: %s', e)
 
     try:
         for pi, db, text in all_discarded:
@@ -874,12 +967,12 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                     if crop:
                         block.update(crop)
                     recovered_per_page[pi].append(block)
-                    print(f'[MinerU Server] Page {pi}: decorative repeating→image '
-                          f'bbox={[round(x, 1) for x in db_bbox]}')
+                    logger.debug('Page %d: decorative repeating→image bbox=%s',
+                                pi, [round(x, 1) for x in db_bbox])
                     continue
                 elif not include_figures:
-                    print(f'[MinerU Server] Page {pi}: skipping decorative repeating '
-                          f'bbox={[round(x, 1) for x in db_bbox]} (figures excluded)')
+                    logger.debug('Page %d: skipping decorative repeating bbox=%s (figures excluded)',
+                                pi, [round(x, 1) for x in db_bbox])
                     continue
                 # else: fall through to header/footer classification below
 
@@ -891,14 +984,14 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                     'text': text,
                 }
                 recovered_per_page[pi].append(block)
-                print(f'[MinerU Server] Page {pi}: {block_type} block '
-                      f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+                logger.debug('Page %d: %s block bbox=%s text="%s"',
+                            pi, block_type, [round(x, 1) for x in db_bbox], text[:60])
                 continue
 
             if is_decorative:
                 if not include_figures:
-                    print(f'[MinerU Server] Page {pi}: skipping decorative block '
-                          f'bbox={[round(x, 1) for x in db_bbox]} (figures excluded)')
+                    logger.debug('Page %d: skipping decorative block bbox=%s (figures excluded)',
+                                pi, [round(x, 1) for x in db_bbox])
                     continue
 
                 if figure_display == 'image' and fitz_doc and pi < len(fitz_doc):
@@ -912,8 +1005,8 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                     if crop:
                         block.update(crop)
                     recovered_per_page[pi].append(block)
-                    print(f'[MinerU Server] Page {pi}: decorative→image block '
-                          f'bbox={[round(x, 1) for x in db_bbox]}')
+                    logger.debug('Page %d: decorative→image block bbox=%s',
+                                pi, [round(x, 1) for x in db_bbox])
                 else:
                     # figure_display='text' — recover as text (OCR'd)
                     block = {
@@ -922,8 +1015,8 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                         'text': text or '[Decorative element]',
                     }
                     recovered_per_page[pi].append(block)
-                    print(f'[MinerU Server] Page {pi}: decorative→text block '
-                          f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+                    logger.debug('Page %d: decorative→text block bbox=%s text="%s"',
+                                pi, [round(x, 1) for x in db_bbox], text[:60])
             else:
                 # Real text content — recover as text block
                 block = {
@@ -932,8 +1025,8 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                     'text': text,
                 }
                 recovered_per_page[pi].append(block)
-                print(f'[MinerU Server] Page {pi}: recovered block '
-                      f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
+                logger.debug('Page %d: recovered block bbox=%s text="%s"',
+                            pi, [round(x, 1) for x in db_bbox], text[:60])
     finally:
         if fitz_doc:
             fitz_doc.close()
@@ -1267,8 +1360,8 @@ def _merge_overflowed_blocks(blocks: list[dict]) -> list[dict]:
             block = dict(block)  # copy to avoid mutating original
             block['bbox'] = [x1, y1, x2, y2]
             new_h = y2 - y1
-            print(f'[MinerU Server] Merged block [{i}] with {absorbed_this} empty neighbors: '
-                  f'{block_h:.0f}px → {new_h:.0f}px ({line_count} lines)')
+            logger.debug('Merged block [%d] with %d empty neighbors: %.0fpx → %.0fpx (%d lines)',
+                        i, absorbed_this, block_h, new_h, line_count)
 
         result.append(block)
 
@@ -1329,12 +1422,8 @@ def _merge_overlapping_blocks(blocks: list[dict]) -> list[dict]:
             if small_text:
                 large_text = out[j].get('text') or ''
                 out[j]['text'] = (small_text + '\n' + large_text).strip()
-            print(
-                f'[MinerU Server] Merged overlapping block [{i}] '
-                f'(type={out[i].get("type")}, area={area_i:.0f}) into '
-                f'[{j}] (type={out[j].get("type")}, area={area_j:.0f}); '
-                f'overlap={inter / area_i:.0%}'
-            )
+            logger.debug('Merged overlapping block [%d] (type=%s, area=%.0f) into [%d] (type=%s, area=%.0f); overlap=%.0f%%',
+                        i, out[i].get('type'), area_i, j, out[j].get('type'), area_j, (inter / area_i) * 100)
             dropped.add(i)
             break
 
@@ -1445,7 +1534,7 @@ def _assign_heading_levels(pdf_info: list):
     for block, _, text in title_entries:
         l = block['level']
         level_counts[l] = level_counts.get(l, 0) + 1
-    print(f'[MinerU Server] Heading hierarchy: {len(title_entries)} titles, levels: {level_counts}')
+    logger.info('Heading hierarchy: %d titles, levels: %s', len(title_entries), level_counts)
 
 
 def _is_poor_table_html(html: str) -> bool:
@@ -1495,7 +1584,7 @@ def _attach_table_html(blocks: list, tbl_bbox: list, tbl_html: str):
 
 class MineruHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):
-        print(f'[MinerU Server] {args[0]}')
+        logger.debug('%s', args[0] if args else format)
 
     def _send_json(self, code: int, data: dict):
         body = json.dumps(data).encode()
@@ -1747,7 +1836,9 @@ class MineruHandler(BaseHTTPRequestHandler):
         }
         _evict_old_tasks()
 
-        print(f'[MinerU Server] Task {task_id} created for {file_name} ({len(file_data)} bytes), config={config}')
+        logger.info('Task %s created for %s (%d bytes), config=%s',
+                    task_id, file_name, len(file_data), config,
+                    extra={'task_id': task_id})
 
         thread = threading.Thread(
             target=process_pdf,
@@ -1812,7 +1903,7 @@ def _pre_warm_models():
     """
     global _server_status
     try:
-        print('[MinerU Server] Pre-warming models...')
+        logger.info('Pre-warming models...')
         t0 = time.time()
 
         # Create a minimal 1-page blank PDF to trigger model loading
@@ -1827,12 +1918,12 @@ def _pre_warm_models():
         infer_result = ds.apply(doc_analyze, ocr=True, lang='en', formula_enable=True)
 
         t1 = time.time()
-        print(f'[MinerU Server] Models pre-warmed in {t1-t0:.1f}s')
+        logger.info('Models pre-warmed in %.1fs', t1 - t0,
+                    extra={'duration_ms': round((t1 - t0) * 1000)})
         _server_status = 'ok'
 
     except Exception as e:
-        print(f'[MinerU Server] WARNING: Pre-warm failed: {e}')
-        traceback.print_exc()
+        logger.error('Pre-warm failed: %s', e, extra={'error': str(e)})
         # Still mark as ok — models will load on first real request
         _server_status = 'ok'
 
@@ -1860,7 +1951,7 @@ def _write_magic_pdf_config(models_dir: str):
     }
     with open(config_path, 'w') as f:
         json.dump(config, f, indent=2)
-    print(f'[MinerU Server] Wrote config to {config_path} (models-dir: {models_dir})')
+    logger.info('Wrote config to %s (models-dir: %s)', config_path, models_dir)
 
 
 def _auto_cleanup_loop():
@@ -1880,12 +1971,13 @@ def _auto_cleanup_loop():
                     continue
                 completed_at = task.get('_completed_at', 0)
                 if completed_at and (now - completed_at) > STALE_AGE_SECONDS:
-                    print(f'[MinerU Server] Auto-cleaning stale task {task_id} '
-                          f'(status={status}, age={now - completed_at:.0f}s)')
+                    logger.info('Auto-cleaning stale task %s (status=%s, age=%.0fs)',
+                                task_id, status, now - completed_at,
+                                extra={'task_id': task_id})
                     _cleanup_task(task_id)
             _evict_old_tasks()
         except Exception as e:
-            print(f'[MinerU Server] Auto-cleanup error: {e}')
+            logger.error('Auto-cleanup error: %s', e, extra={'error': str(e)})
 
 
 if __name__ == '__main__':
@@ -1897,6 +1989,12 @@ if __name__ == '__main__':
     parser.add_argument('--no-warm', action='store_true',
                         help='Skip model pre-warming on startup')
     args = parser.parse_args()
+
+    # Set up structured JSON logging with rotation
+    _setup_logging()
+    # Redirect native stdout/stderr (torch, MinerU, PaddleOCR prints) through logger
+    sys.stdout = StreamToLogger(logger, logging.INFO)
+    sys.stderr = StreamToLogger(logger, logging.WARNING)
 
     # Write magic-pdf.json if --models-dir is provided
     if args.models_dir:
@@ -1912,8 +2010,8 @@ if __name__ == '__main__':
     server = HTTPServer(('127.0.0.1', args.port), MineruHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
-    print(f'[MinerU Server] Listening on http://127.0.0.1:{args.port}')
-    print(f'[MinerU Server] Endpoints: GET /health, POST /file_parse, GET /tasks/{{id}}')
+    logger.info('Listening on http://127.0.0.1:%d', args.port)
+    logger.info('Endpoints: GET /health, POST /file_parse, GET /tasks/{id}')
 
     # Pre-warm models (blocking — health returns 503 until done)
     if not args.no_warm:
@@ -1925,10 +2023,10 @@ if __name__ == '__main__':
     cleanup_thread = threading.Thread(target=_auto_cleanup_loop, daemon=True)
     cleanup_thread.start()
 
-    print(f'[MinerU Server] Ready')
+    logger.info('Ready')
 
     try:
         server_thread.join()
     except KeyboardInterrupt:
-        print('\n[MinerU Server] Shutting down')
+        logger.info('Shutting down')
         server.shutdown()
