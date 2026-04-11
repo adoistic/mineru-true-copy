@@ -1,9 +1,13 @@
 /**
  * Export engine: generates all selected output formats.
  *
- * All formats are generated from the structured OCR JSON via html-converter,
- * which uses properly joined text from preproc_blocks and supports
- * formula/table display modes.
+ * Output structure:
+ *   outputFolder/
+ *     <baseName>/
+ *       True Copy/    — pixel-perfect positioned exports
+ *       Reflowed/     — semantic, editable exports
+ *       Data/         — structured data + searchable PDF
+ *       <baseName>.zip (optional)
  */
 import { MineruOutput, ExportFormat } from '@/types';
 import { mineruToHtml, HtmlConversionOptions } from '@/lib/mineru/html-converter';
@@ -37,11 +41,48 @@ export interface ExportParams {
   htmlOptions?: HtmlConversionOptions;
 }
 
-export async function exportAll(params: ExportParams): Promise<string[]> {
-  const { formats, outputFolder } = params;
+/** Subfolder category for each export format */
+function formatCategory(format: ExportFormat): 'True Copy' | 'Reflowed' | 'Data' {
+  switch (format) {
+    case 'true_copy_html':
+    case 'true_copy_docx':
+    case 'true_copy_pdf':
+    case 'true_copy_pptx':
+    case 'docx': // legacy key → true-copy
+      return 'True Copy';
+    case 'html':
+    case 'reflowed_docx':
+    case 'reflowed_pdf':
+    case 'markdown':
+    case 'epub':
+      return 'Reflowed';
+    case 'searchable_pdf':
+    case 'json':
+    case 'csv':
+      return 'Data';
+    default:
+      return 'Data';
+  }
+}
 
-  if (!fs.existsSync(outputFolder)) {
-    fs.mkdirSync(outputFolder, { recursive: true });
+export async function exportAll(params: ExportParams): Promise<string[]> {
+  const { formats, outputFolder, baseName } = params;
+
+  // Create per-document folder
+  const docFolder = path.join(outputFolder, baseName);
+  if (!fs.existsSync(docFolder)) {
+    fs.mkdirSync(docFolder, { recursive: true });
+  }
+
+  // Create category subfolders as needed
+  const neededCategories = new Set(
+    formats.filter(f => f !== 'zip').map(f => formatCategory(f))
+  );
+  for (const cat of neededCategories) {
+    const catDir = path.join(docFolder, cat);
+    if (!fs.existsSync(catDir)) {
+      fs.mkdirSync(catDir, { recursive: true });
+    }
   }
 
   const outputFiles: string[] = [];
@@ -50,7 +91,7 @@ export async function exportAll(params: ExportParams): Promise<string[]> {
     if (format === 'zip') continue;
 
     try {
-      const filePath = await exportFormat(format, params);
+      const filePath = await exportFormat(format, params, docFolder);
       if (filePath) outputFiles.push(filePath);
     } catch (err) {
       console.error(`[Export] Failed to export ${format}:`, err);
@@ -66,7 +107,7 @@ export async function exportAll(params: ExportParams): Promise<string[]> {
           includeImages: true,
         }
       );
-      const benchmarkPath = path.join(outputFolder, `${params.baseName}_true_copy_benchmark.html`);
+      const benchmarkPath = path.join(docFolder, 'True Copy', `${baseName}_benchmark.html`);
       fs.writeFileSync(benchmarkPath, withImages, 'utf-8');
       outputFiles.push(benchmarkPath);
     } catch (err) {
@@ -74,9 +115,16 @@ export async function exportAll(params: ExportParams): Promise<string[]> {
     }
   }
 
+  // Save raw OCR data JSON in Data/
+  const dataDir = path.join(docFolder, 'Data');
+  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
+  const ocrDataPath = path.join(dataDir, `${baseName}_ocr_data.json`);
+  fs.writeFileSync(ocrDataPath, JSON.stringify(params.mineruOutput, null, 2));
+  outputFiles.push(ocrDataPath);
+
   if (formats.includes('zip') && outputFiles.length > 0) {
     try {
-      const zipPath = path.join(outputFolder, `${params.baseName}.zip`);
+      const zipPath = path.join(docFolder, `${baseName}.zip`);
       await createZip(outputFiles, zipPath);
       outputFiles.push(zipPath);
     } catch (err) {
@@ -115,41 +163,44 @@ async function getHtml(params: ExportParams): Promise<string> {
 
 async function exportFormat(
   format: ExportFormat,
-  params: ExportParams
+  params: ExportParams,
+  docFolder: string,
 ): Promise<string | null> {
-  const { mineruOutput, taskId, outputFolder, baseName, originalPdfPath } = params;
+  const { mineruOutput, taskId, baseName, originalPdfPath } = params;
+  const category = formatCategory(format);
+  const catDir = path.join(docFolder, category);
 
   switch (format) {
     case 'markdown': {
       const mdContent = await getMarkdown(params);
-      const filePath = path.join(outputFolder, `${baseName}.md`);
+      const filePath = path.join(catDir, `${baseName}.md`);
       fs.writeFileSync(filePath, mdContent, 'utf-8');
       return filePath;
     }
 
     case 'json': {
       const content = mineruOutput;
-      const filePath = path.join(outputFolder, `${baseName}.json`);
+      const filePath = path.join(catDir, `${baseName}.json`);
       fs.writeFileSync(filePath, JSON.stringify(content, null, 2), 'utf-8');
       return filePath;
     }
 
     case 'html': {
       const htmlContent = await getHtml(params);
-      const filePath = path.join(outputFolder, `${baseName}.html`);
+      const filePath = path.join(catDir, `${baseName}.html`);
       fs.writeFileSync(filePath, htmlContent, 'utf-8');
       return filePath;
     }
 
     case 'searchable_pdf': {
-      const filePath = path.join(outputFolder, `${baseName}_searchable.pdf`);
+      const filePath = path.join(catDir, `${baseName}_searchable.pdf`);
       await createSearchablePdf(mineruOutput, originalPdfPath, filePath);
       return filePath;
     }
 
     case 'epub': {
       const htmlContent = await getHtml(params);
-      const filePath = path.join(outputFolder, `${baseName}.epub`);
+      const filePath = path.join(catDir, `${baseName}.epub`);
       await createEpub(htmlContent, baseName, filePath);
       return filePath;
     }
@@ -159,12 +210,11 @@ async function exportFormat(
         console.warn('[Export] True-copy HTML requires a live taskId');
         return null;
       }
-      // Text-only true copy (standard)
       const textOnly = await createTrueCopyHtml(mineruOutput, taskId, baseName, {
         removeHeadersFooters: params.removeHeadersFooters,
         includeImages: false,
       });
-      const filePath = path.join(outputFolder, `${baseName}_true_copy.html`);
+      const filePath = path.join(catDir, `${baseName}.html`);
       fs.writeFileSync(filePath, textOnly, 'utf-8');
       return filePath;
     }
@@ -179,7 +229,7 @@ async function exportFormat(
         removeHeadersFooters: params.removeHeadersFooters,
         includeImages: params.includeBenchmarkImages,
       });
-      const filePath = path.join(outputFolder, `${baseName}_true_copy.docx`);
+      const filePath = path.join(catDir, `${baseName}.docx`);
       fs.writeFileSync(filePath, Buffer.from(docxBuffer));
       return filePath;
     }
@@ -193,7 +243,7 @@ async function exportFormat(
         removeHeadersFooters: params.removeHeadersFooters,
         includeImages: params.includeBenchmarkImages,
       });
-      const filePath = path.join(outputFolder, `${baseName}_true_copy.pdf`);
+      const filePath = path.join(catDir, `${baseName}.pdf`);
       fs.writeFileSync(filePath, Buffer.from(pdfBuffer));
       return filePath;
     }
@@ -207,7 +257,7 @@ async function exportFormat(
         removeHeadersFooters: params.removeHeadersFooters,
         includeImages: params.includeBenchmarkImages,
       });
-      const filePath = path.join(outputFolder, `${baseName}_true_copy.pptx`);
+      const filePath = path.join(catDir, `${baseName}.pptx`);
       fs.writeFileSync(filePath, Buffer.from(pptxBuffer));
       return filePath;
     }
@@ -216,7 +266,7 @@ async function exportFormat(
       const reflowedDocxBuf = await createReflowedDocx(mineruOutput, {
         removeHeadersFooters: params.removeHeadersFooters,
       });
-      const filePath = path.join(outputFolder, `${baseName}.docx`);
+      const filePath = path.join(catDir, `${baseName}.docx`);
       fs.writeFileSync(filePath, Buffer.from(reflowedDocxBuf));
       return filePath;
     }
@@ -225,7 +275,7 @@ async function exportFormat(
       const reflowedPdfBuf = await createReflowedPdf(mineruOutput, {
         removeHeadersFooters: params.removeHeadersFooters,
       });
-      const filePath = path.join(outputFolder, `${baseName}.pdf`);
+      const filePath = path.join(catDir, `${baseName}.pdf`);
       fs.writeFileSync(filePath, Buffer.from(reflowedPdfBuf));
       return filePath;
     }

@@ -258,7 +258,10 @@ export class HeadingCorrectionPipeline implements Pipeline {
   ): Promise<PipelineResult> {
     const config = job.tool_config as unknown as ProcessingOptions;
     const baseName = path.parse(job.file_name).name;
-    const jsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
+    // Look for OCR data in new subfolder structure first, fall back to legacy flat path
+    const newJsonPath = path.join(config.output_folder, baseName, 'Data', `${baseName}_ocr_data.json`);
+    const legacyJsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
+    const jsonPath = fs.existsSync(newJsonPath) ? newJsonPath : legacyJsonPath;
 
     try {
       // Step 1: Read MinerU JSON

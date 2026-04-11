@@ -83,10 +83,6 @@ export class OcrPipeline implements Pipeline {
       includeBenchmarkImages: config.include_benchmark_images,
     });
 
-    // Save raw OCR data JSON for reference
-    const jsonPath = path.join(config.output_folder, `${baseName}_ocr_data.json`);
-    fs.writeFileSync(jsonPath, JSON.stringify(mineruOutput, null, 2));
-
     // Cleanup: signal server to free heavy resources (PDF bytes, pipe_result, img_dir)
     await deleteTask(taskId);
 

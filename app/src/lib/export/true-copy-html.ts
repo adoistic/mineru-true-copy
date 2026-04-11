@@ -483,8 +483,9 @@ function getFitScript(): string {
     var bestSize = lo;
 
     // Phase 2: binary search within the discovered window.
-    for (var iter = 0; iter < 20; iter++) {
-      if (hi - lo < 0.5) break;
+    // 40 iterations at 0.05px tolerance gives sub-pixel precision.
+    for (var iter = 0; iter < 40; iter++) {
+      if (hi - lo < 0.05) break;
       var mid = (lo + hi) / 2;
       var measuredHeight = measureAt(rawText, mid, boxWidth, isBold, opts, hasEquations, eqInfo, fontFamily);
       if (measuredHeight <= boxHeight) {
@@ -496,7 +497,7 @@ function getFitScript(): string {
     }
     if (bestSize < FLOOR) bestSize = FLOOR;
 
-    el.style.fontSize = bestSize.toFixed(1) + 'px';
+    el.style.fontSize = bestSize.toFixed(2) + 'px';
     var computedLineH = Math.round(bestSize * LINE_HEIGHT_RATIO);
     el.style.lineHeight = computedLineH + 'px';
     if (el.hasAttribute('data-prewrap')) el.style.whiteSpace = 'pre-wrap';
@@ -572,7 +573,7 @@ function getFitScript(): string {
     var tBest = tlo;
 
     if (thi > tlo) {
-      for (var titer = 0; titer < 20; titer++) {
+      for (var titer = 0; titer < 40; titer++) {
         var tmid = (tlo + thi) / 2;
         tel.style.fontSize = tmid + 'px';
         if (tel.scrollHeight <= tBoxH) {
@@ -581,11 +582,11 @@ function getFitScript(): string {
         } else {
           thi = tmid;
         }
-        if (thi - tlo < 0.25) break;
+        if (thi - tlo < 0.05) break;
       }
     }
 
-    tel.style.fontSize = tBest.toFixed(1) + 'px';
+    tel.style.fontSize = tBest.toFixed(2) + 'px';
   }
 })();`;
 }

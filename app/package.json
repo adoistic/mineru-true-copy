@@ -26,6 +26,7 @@
     "markdown-it": "^14.1.1",
     "markdown-it-texmath": "^1.0.0",
     "next": "16.2.2",
+    "opentype.js": "^1.3.4",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^5.6.205",
     "pptxgenjs": "^4.0.1",

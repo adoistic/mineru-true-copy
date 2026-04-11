@@ -209,7 +209,11 @@ def _cleanup_task(task_id: str, *, remove_from_store: bool = False):
     Frees _pdf_bytes, _pipe_result, result, and _img_dir on disk.
     """
     task = tasks.get(task_id)
-    if not task or task.get('_cleaned'):
+    if not task:
+        return
+    if task.get('_cleaned'):
+        if remove_from_store:
+            tasks.pop(task_id, None)
         return
 
     freed = []
@@ -849,6 +853,36 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                 is_repeating = False
                 is_page_num = False
 
+            # Check decorative BEFORE repeating, so QR codes / logos that
+            # happen to repeat on every page get cropped as images when user
+            # selected "include as image", instead of being treated as headers
+            page_w = pages[pi]['page_size']['width'] if pi < len(pages) else 612
+            is_decorative = _is_decorative_block(db, text, page_w)
+
+            if is_decorative and (is_repeating or is_page_num):
+                # Decorative repeating element (QR code, logo, icon on every page).
+                # When figure_display='image', crop as image. Otherwise treat as
+                # header/footer with the OCR'd text.
+                if figure_display == 'image' and include_figures and fitz_doc and pi < len(fitz_doc):
+                    block = {
+                        'type': 'image',
+                        'bbox': db_bbox,
+                        'text': '',
+                    }
+                    crop = _crop_and_embed(db_bbox, pi, fitz_doc[pi],
+                                           img_dir, discard_pdf_md5, 'decorative_repeat')
+                    if crop:
+                        block.update(crop)
+                    recovered_per_page[pi].append(block)
+                    print(f'[MinerU Server] Page {pi}: decorative repeating→image '
+                          f'bbox={[round(x, 1) for x in db_bbox]}')
+                    continue
+                elif not include_figures:
+                    print(f'[MinerU Server] Page {pi}: skipping decorative repeating '
+                          f'bbox={[round(x, 1) for x in db_bbox]} (figures excluded)')
+                    continue
+                # else: fall through to header/footer classification below
+
             if is_repeating or is_page_num:
                 block_type = 'header' if is_top_half else 'footer'
                 block = {
@@ -860,10 +894,6 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
                 print(f'[MinerU Server] Page {pi}: {block_type} block '
                       f'bbox={[round(x, 1) for x in db_bbox]} text="{text[:60]}"')
                 continue
-
-            # Use unified decorative detection
-            page_w = pages[pi]['page_size']['width'] if pi < len(pages) else 612
-            is_decorative = _is_decorative_block(db, text, page_w)
 
             if is_decorative:
                 if not include_figures:
@@ -1540,6 +1570,7 @@ class MineruHandler(BaseHTTPRequestHandler):
                     try:
                         from fontTools.ttLib import TTFont
                         font = TTFont(woff2_path)
+                        font.flavor = None  # Strip WOFF2 wrapper to produce real TTF
                         font.save(ttf_path)
                         font.close()
                     except Exception as e:

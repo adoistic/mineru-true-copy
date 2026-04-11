@@ -43,7 +43,11 @@ export async function POST(request: Request) {
     }
 
     const baseName = path.parse(job.file_name).name;
-    const ocrDataPath = path.join(job.output_folder, `${baseName}_ocr_data.json`);
+
+    // Look for OCR data in new subfolder structure first, fall back to legacy flat path
+    const newOcrDataPath = path.join(job.output_folder, baseName, 'Data', `${baseName}_ocr_data.json`);
+    const legacyOcrDataPath = path.join(job.output_folder, `${baseName}_ocr_data.json`);
+    const ocrDataPath = fs.existsSync(newOcrDataPath) ? newOcrDataPath : legacyOcrDataPath;
 
     if (!fs.existsSync(ocrDataPath)) {
       return Response.json(

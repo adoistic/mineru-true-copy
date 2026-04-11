@@ -5,15 +5,46 @@ import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
 import type { ExportFormat } from "@/types";
 
-const OUTPUT_FORMATS: { key: ExportFormat; label: string }[] = [
-  { key: "html", label: "HTML" },
-  { key: "true_copy_html", label: "True Copy HTML" },
-  { key: "markdown", label: "Markdown" },
-  { key: "searchable_pdf", label: "Searchable PDF" },
-  { key: "epub", label: "EPUB" },
-  { key: "json", label: "JSON" },
-  { key: "zip", label: "ZIP" },
+interface FormatGroup {
+  label: string;
+  description: string;
+  formats: { key: ExportFormat; label: string; tooltip?: string }[];
+}
+
+const FORMAT_GROUPS: FormatGroup[] = [
+  {
+    label: "True Copy",
+    description: "Pixel-perfect replica preserving exact layout and positions",
+    formats: [
+      { key: "true_copy_html", label: "HTML", tooltip: "Self-contained HTML with text at exact positions" },
+      { key: "true_copy_docx", label: "Word (.docx)", tooltip: "Word document with positioned text boxes" },
+      { key: "true_copy_pdf", label: "PDF", tooltip: "Reconstructed PDF with visible text at exact positions" },
+      { key: "true_copy_pptx", label: "PowerPoint (.pptx)", tooltip: "Slides with positioned text boxes" },
+    ],
+  },
+  {
+    label: "Reflowed",
+    description: "Clean, editable documents with proper paragraph flow",
+    formats: [
+      { key: "html", label: "HTML", tooltip: "Semantic HTML with headings, paragraphs, and tables" },
+      { key: "reflowed_docx", label: "Word (.docx)", tooltip: "Editable Word document with proper styles" },
+      { key: "reflowed_pdf", label: "PDF", tooltip: "Readable PDF with paragraph flow and page breaks" },
+      { key: "markdown", label: "Markdown", tooltip: "Plain text with Markdown formatting" },
+      { key: "epub", label: "EPUB", tooltip: "E-book format for readers" },
+    ],
+  },
+  {
+    label: "Data",
+    description: "Structured output for downstream processing",
+    formats: [
+      { key: "searchable_pdf", label: "Searchable PDF", tooltip: "Original PDF with invisible OCR text layer" },
+      { key: "json", label: "JSON", tooltip: "Structured OCR data with regions, bboxes, and metadata" },
+    ],
+  },
 ];
+
+// Default selection: all formats selected
+const DEFAULT_FORMATS: ExportFormat[] = FORMAT_GROUPS.flatMap(g => g.formats.map(f => f.key));
 
 export default function OcrTool() {
   const [files, setFiles] = useState<File[]>([]);
@@ -23,7 +54,7 @@ export default function OcrTool() {
       : ""
   );
   const [selectedFormats, setSelectedFormats] = useState<Set<ExportFormat>>(
-    new Set(OUTPUT_FORMATS.map(f => f.key))
+    new Set(DEFAULT_FORMATS)
   );
   const [includeBenchmarkHtml, setIncludeBenchmarkHtml] = useState(false);
   const [removeHeaders, setRemoveHeaders] = useState(false);
@@ -286,27 +317,80 @@ export default function OcrTool() {
           </div>
         </div>
 
-        {/* Output formats */}
+        {/* Output formats — grouped by category */}
         <div>
-          <label className="mb-2 block text-sm text-slate-600 dark:text-slate-400">
+          <label className="mb-3 block text-sm text-slate-600 dark:text-slate-400">
             Output Formats
           </label>
-          <div className="flex flex-wrap gap-3">
-            {OUTPUT_FORMATS.map(({ key, label }) => (
-              <label
-                key={key}
-                className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedFormats.has(key)}
-                  onChange={() => toggleFormat(key)}
-                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
-                />
-                {label}
-              </label>
-            ))}
+          <div className="space-y-4">
+            {FORMAT_GROUPS.map((group) => {
+              const groupKeys = group.formats.map(f => f.key);
+              const allSelected = groupKeys.every(k => selectedFormats.has(k));
+              const noneSelected = groupKeys.every(k => !selectedFormats.has(k));
+
+              return (
+                <div
+                  key={group.label}
+                  className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-600 dark:bg-slate-700/30"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        {group.label}
+                      </span>
+                      <p className="text-xs text-slate-400 dark:text-slate-500">
+                        {group.description}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFormats(prev => {
+                          const next = new Set(prev);
+                          if (allSelected) {
+                            groupKeys.forEach(k => next.delete(k));
+                          } else {
+                            groupKeys.forEach(k => next.add(k));
+                          }
+                          return next;
+                        });
+                      }}
+                      className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                    >
+                      {allSelected ? "Deselect all" : noneSelected ? "Select all" : "Select all"}
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-2">
+                    {group.formats.map(({ key, label, tooltip }) => (
+                      <label
+                        key={key}
+                        className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"
+                        title={tooltip}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={selectedFormats.has(key)}
+                          onChange={() => toggleFormat(key)}
+                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
           </div>
+          {/* ZIP bundle option */}
+          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={selectedFormats.has("zip")}
+              onChange={() => toggleFormat("zip")}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+            />
+            Bundle all outputs into a ZIP file
+          </label>
         </div>
 
         {/* Toggles */}
@@ -377,12 +461,12 @@ export default function OcrTool() {
           </div>
         </div>
 
-        {/* Benchmark image overlay — only visible when True Copy HTML is selected */}
-        {selectedFormats.has("true_copy_html") && (
+        {/* Benchmark image overlay — visible when any true-copy format is selected */}
+        {(selectedFormats.has("true_copy_html") || selectedFormats.has("true_copy_docx") || selectedFormats.has("true_copy_pdf") || selectedFormats.has("true_copy_pptx")) && (
           <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-600 dark:bg-slate-700/50">
             <label className="flex items-center justify-between">
               <span className="text-sm text-slate-700 dark:text-slate-300">
-                Include benchmark version with images
+                Include page images in true-copy exports
               </span>
               <button
                 type="button"
@@ -401,7 +485,7 @@ export default function OcrTool() {
               </button>
             </label>
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Generates an additional true-copy HTML file that overlays OCR text on original page images, so you can visually verify accuracy. Increases file size significantly.
+              Overlays OCR text on original page images for visual verification. Useful for benchmarking accuracy. Increases file size significantly.
             </p>
           </div>
         )}
