@@ -99,6 +99,11 @@ def patch():
         if model_name == AtomicModel.OCR:
             if ocr_mode == 'local':
                 logger.info('[patch_mineru] OCR model: local (PaddleOCR)')
+                # Maximize batch sizes for local GPU — no rate limits, no API costs.
+                # Default rec_batch_num=6 means 7000+ GPU passes for a 200-page book.
+                # At 64, that drops to ~670 passes — 10x fewer round-trips.
+                kwargs['rec_batch_num'] = 64
+                kwargs['cls_batch_num'] = 64
                 return _original_atom_init(model_name, **kwargs)
             else:
                 lang = kwargs.get('lang') or 'ch'
@@ -179,19 +184,25 @@ def patch():
         )
         images = [image for image, _, _ in images_with_extra_info]
 
+        # Batch sizes for GPU inference. Default MinerU uses batch_size=1 for
+        # layout and MFD (one page at a time through GPU). On Apple Silicon with
+        # unified memory, we can batch many pages at once for better throughput.
+        _layout_batch = 8
+        _mfd_batch = 8
+
         if self.model.layout_model_name == MODEL_NAME.DocLayout_YOLO:
             layout_images = list(images)
             images_layout_res += self.model.layout_model.batch_predict(
-                layout_images, 1)
+                layout_images, _layout_batch)
         else:
             for image in images:
                 layout_res = self.model.layout_model(image, ignore_catids=[])
                 images_layout_res.append(layout_res)
 
         if self.model.apply_formula:
-            images_mfd_res = self.model.mfd_model.batch_predict(images, 1)
+            images_mfd_res = self.model.mfd_model.batch_predict(images, _mfd_batch)
             images_formula_list = self.model.mfr_model.batch_predict(
-                images_mfd_res, images, batch_size=self.batch_ratio * 16)
+                images_mfd_res, images, batch_size=self.batch_ratio * 64)
             for i in range(len(images)):
                 images_layout_res[i] += images_formula_list[i]
 
