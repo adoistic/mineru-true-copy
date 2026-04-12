@@ -725,7 +725,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         t_start = time.time()
         config = config or {}
 
-        ds = PymuDocDataset(pdf_bytes, lang='en')
+        ocr_lang = _config.get('ocr_lang', 'en')
+        ds = PymuDocDataset(pdf_bytes, lang=ocr_lang)
 
         # Step 1: Model inference (layout detection + OCR)
         # GPU-heavy: layout (DocLayout-YOLO), formula (MFD+UniMerNet), OCR (PaddleOCR/VLM)
@@ -744,7 +745,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             infer_result = ds.apply(
                 doc_analyze,
                 ocr=True,
-                lang='en',
+                lang=ocr_lang,
                 formula_enable=formula_enable,
                 table_enable=table_enable,
             )
@@ -767,7 +768,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         img_dir = os.path.join(tmpdir, 'images')
         image_writer = FileBasedDataWriter(img_dir)
         pipe_result = infer_result.pipe_ocr_mode(
-            image_writer, debug_mode=True, lang='en'
+            image_writer, debug_mode=True, lang=ocr_lang
         )
         t3 = time.time()
         logger.info('Step 2 (pipe_ocr_mode): %.1fs', t3 - t2,
@@ -2752,6 +2753,7 @@ class MineruHandler(BaseHTTPRequestHandler):
             'figure_display': fields.get('figure_display', 'image'),
             'ocr_mode': ocr_mode,
             'table_mode': table_mode,
+            'ocr_lang': fields.get('ocr_lang', 'en'),
         }
 
         # Create task and start processing

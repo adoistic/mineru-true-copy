@@ -152,6 +152,7 @@ export interface ProcessingOptions {
   include_benchmark_images?: boolean;      // true-copy HTML: also produce version with page images
   processing_mode?: ProcessingMode;        // 'local' (default) or 'cloud'
   table_mode?: ProcessingMode;             // 'cloud' (default) or 'local'
+  ocr_lang?: string;                       // 'en' (default), 'devanagari', 'arabic', etc.
 }
 
 export interface ExtractionOptions {

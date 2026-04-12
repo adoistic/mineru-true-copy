@@ -92,6 +92,7 @@ export interface SubmitOptions {
   figureDisplay?: 'image' | 'text';
   processingMode?: 'local' | 'cloud';
   tableMode?: 'local' | 'cloud';
+  ocrLang?: string;
 }
 
 export async function submitFile(filePath: string, options?: SubmitOptions): Promise<string> {
@@ -116,6 +117,7 @@ export async function submitFile(filePath: string, options?: SubmitOptions): Pro
   if (options?.figureDisplay) formData.append('figure_display', options.figureDisplay);
   if (options?.processingMode) formData.append('processing_mode', options.processingMode);
   if (options?.tableMode) formData.append('table_mode', options.tableMode);
+  if (options?.ocrLang) formData.append('ocr_lang', options.ocrLang);
 
   const response = await fetch(`${getMineruUrl()}/file_parse`, {
     method: 'POST',

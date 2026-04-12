@@ -72,6 +72,11 @@ export default function OcrTool() {
       ? (localStorage.getItem("table_mode") as ProcessingMode)
       : null) ?? "cloud"
   );
+  const [ocrLang, setOcrLang] = useState(() =>
+    (typeof window !== "undefined"
+      ? localStorage.getItem("ocr_lang")
+      : null) ?? "en"
+  );
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
@@ -151,6 +156,7 @@ export default function OcrTool() {
             include_benchmark_images: includeBenchmarkHtml,
             processing_mode: processingMode,
             table_mode: processingMode === 'cloud' ? 'cloud' : tableMode,
+            ocr_lang: ocrLang,
           })
         );
 
@@ -185,7 +191,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode]);
+  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode, ocrLang]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -583,6 +589,48 @@ export default function OcrTool() {
               )}
             </div>
           )}
+        </div>
+
+        {/* Document Script / Language */}
+        <div>
+          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+            Document Script
+          </label>
+          <select
+            value={ocrLang}
+            onChange={(e) => {
+              setOcrLang(e.target.value);
+              localStorage.setItem("ocr_lang", e.target.value);
+            }}
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+          >
+            <optgroup label="Common">
+              <option value="en">English</option>
+              <option value="ch">Chinese (Simplified)</option>
+              <option value="chinese_cht">Chinese (Traditional)</option>
+              <option value="devanagari">Hindi / Devanagari</option>
+              <option value="arabic">Arabic / Urdu / Persian</option>
+              <option value="latin">Latin Script (French, Spanish, German, etc.)</option>
+            </optgroup>
+            <optgroup label="Asian">
+              <option value="korean">Korean</option>
+              <option value="japan">Japanese</option>
+              <option value="thai">Thai</option>
+              <option value="ta">Tamil</option>
+              <option value="te">Telugu</option>
+            </optgroup>
+            <optgroup label="Other Scripts">
+              <option value="cyrillic">Cyrillic (Russian, Ukrainian, etc.)</option>
+              <option value="greek">Greek</option>
+              <option value="eslav">East Slavic</option>
+              <option value="ka">Georgian</option>
+            </optgroup>
+          </select>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            {processingMode === 'cloud'
+              ? "Cloud processing auto-detects the script. This setting is used as a hint."
+              : "Local processing uses a script-specific model. Select the primary script in your document for best accuracy."}
+          </p>
         </div>
 
         {/* Toggles */}

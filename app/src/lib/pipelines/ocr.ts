@@ -34,6 +34,7 @@ export class OcrPipeline implements Pipeline {
       figureDisplay: config.figure_display,
       processingMode: config.processing_mode,
       tableMode: config.table_mode,
+      ocrLang: config.ocr_lang,
     });
 
     // Step 2: Poll for completion
