@@ -63,6 +63,8 @@ datas += collect_data_files('ultralytics')
 datas += collect_data_files('magic_pdf')
 datas += collect_data_files('tiktoken')
 datas += collect_data_files('doclayout_yolo')
+# Bundle font files (Latin + Noto non-Latin) for the /fonts/ endpoint
+datas += [('../lib/fonts', 'lib/fonts')]
 
 a = Analysis(
     ['../mineru_server.py'],

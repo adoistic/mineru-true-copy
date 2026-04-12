@@ -36,7 +36,7 @@
       "icons/icon.png"
     ],
     "externalBin": [],
-    "resources": ["../lib/fonts/font_classifier.onnx"]
+    "resources": ["../lib/fonts/font_classifier.onnx", "../lib/fonts/*.woff2"]
   },
   "plugins": {
     "shell": {

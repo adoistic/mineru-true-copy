@@ -411,6 +411,36 @@ _server_status = "warming"
 # Suffixes: HTTP status or error category
 # User sees clean copy + error code. Developer decodes from prefix.
 
+# ---------------------------------------------------------------------------
+# Script-aware font defaults
+# ---------------------------------------------------------------------------
+# Non-Latin scripts skip the Latin font classifier (ONNX ResNet-18 trained on
+# 50 Latin fonts). Instead, we set a Noto Sans default per script.
+# These WOFF2 files are bundled in lib/fonts/.
+
+_NON_LATIN_SCRIPTS = frozenset({
+    'ch', 'chinese_cht', 'japan', 'korean', 'devanagari',
+    'arabic', 'thai', 'ta', 'te', 'ka',
+})
+
+SCRIPT_DEFAULT_FONTS = {
+    'en':          {'family': 'Inter',                'file': None},
+    'latin':       {'family': 'Inter',                'file': None},
+    'ch':          {'family': 'Noto Sans SC',         'file': 'NotoSansSC-Regular.woff2'},
+    'chinese_cht': {'family': 'Noto Sans TC',         'file': 'NotoSansTC-Regular.woff2'},
+    'japan':       {'family': 'Noto Sans JP',         'file': 'NotoSansJP-Regular.woff2'},
+    'korean':      {'family': 'Noto Sans KR',         'file': 'NotoSansKR-Regular.woff2'},
+    'devanagari':  {'family': 'Noto Sans Devanagari', 'file': 'NotoSansDevanagari-Regular.woff2'},
+    'arabic':      {'family': 'Noto Sans Arabic',     'file': 'NotoSansArabic-Regular.woff2'},
+    'cyrillic':    {'family': 'Inter',                'file': None},  # Inter covers Cyrillic
+    'greek':       {'family': 'Inter',                'file': None},  # Inter covers Greek
+    'thai':        {'family': 'Noto Sans Thai',       'file': 'NotoSansThai-Regular.woff2'},
+    'ta':          {'family': 'Noto Sans Tamil',      'file': 'NotoSansTamil-Regular.woff2'},
+    'te':          {'family': 'Noto Sans Telugu',     'file': 'NotoSansTelugu-Regular.woff2'},
+    'ka':          {'family': 'Inter',                'file': None},  # Georgian subset too small, use Inter
+    'eslav':       {'family': 'Inter',                'file': None},  # Inter covers Cyrillic
+}
+
 ERROR_MESSAGES = {
     'CP-401': 'Cloud processing is temporarily unavailable. Check your connection or switch to Local Processing.',
     'CP-429': 'Cloud processing is busy. Your document will be processed shortly, or switch to Local Processing for instant results.',
@@ -814,6 +844,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             ocr_lang = ocr_lang_raw
         ds = PymuDocDataset(pdf_bytes, lang=ocr_lang)
 
+        # Read the resolved language (after auto-detection if lang='auto')
+        detected_lang = getattr(ds, '_lang', ocr_lang) or 'en'
+        is_non_latin = detected_lang in _NON_LATIN_SCRIPTS
+        if is_non_latin:
+            logger.info('Non-Latin script detected: %s — skipping Latin font classifier',
+                        detected_lang, extra={'task_id': task_id})
+
         # Step 1: Model inference (layout detection + OCR)
         # GPU-heavy: layout (DocLayout-YOLO), formula (MFD+UniMerNet), OCR (PaddleOCR/VLM)
         # Serialized via _gpu_lock so concurrent documents don't thrash the GPU.
@@ -915,12 +952,23 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
 
         # Step 2e: Document-level font discovery
         # Always try PyMuPDF first (works for digital-born PDFs).
-        # If no text spans are found (scanned PDF), _pdf_is_scanned is set True
-        # and the ResNet-18 classifier runs after blocks are collected.
+        # Font detection: skip Latin classifier for non-Latin scripts.
         _digital_font_spans: dict[int, list[tuple[str, list, int]]] = {}
         _used_fonts: dict[str, str] = {}  # {bundled_file: family_name}
         _pdf_is_scanned = False
-        if _FONT_MAP:
+        _script_default_font = None
+
+        if is_non_latin:
+            # Non-Latin: skip font classifier, use script-appropriate Noto font
+            default = SCRIPT_DEFAULT_FONTS.get(detected_lang, SCRIPT_DEFAULT_FONTS['en'])
+            _script_default_font = default['family']
+            if default['file']:
+                _used_fonts = {default['file']: default['family']}
+            t3e = time.time()
+            logger.info('Step 2e (font): skipped classifier for %s, using %s',
+                        detected_lang, default['family'],
+                        extra={'task_id': task_id})
+        elif _FONT_MAP:
             _digital_font_spans = _discover_digital_fonts(_fitz_doc)
             total_spans = sum(len(spans) for spans in _digital_font_spans.values())
             if total_spans > 0:
@@ -1140,11 +1188,19 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 logger.warning('Scanned font detection failed: %s', e,
                                extra={'task_id': task_id})
 
+        # Non-Latin: assign script default font to all text blocks
+        if _script_default_font:
+            for pg in pages:
+                for blk in pg.get('preproc_blocks', []):
+                    if blk.get('type') in ('text', 'title', 'list', 'index', 'caption'):
+                        blk['font_family'] = _script_default_font
+
         _fitz_doc.close()
 
         result = {
             'pdf_info': pages,
             'file_name': file_name,
+            'detected_script': detected_lang,
         }
         if _used_fonts:
             result['used_fonts'] = _used_fonts
