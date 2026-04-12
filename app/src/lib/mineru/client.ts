@@ -11,7 +11,7 @@ let mineruStatus: MineruStatus = 'stopped';
 let healthCheckTimer: NodeJS.Timeout | null = null;
 
 export function getMineruUrl(): string {
-  return process.env.MINERU_API_URL || 'http://127.0.0.1:8765';
+  return process.env.MINERU_API_URL || 'http://localhost:51820';
 }
 
 export function getMineruStatus(): MineruStatus {

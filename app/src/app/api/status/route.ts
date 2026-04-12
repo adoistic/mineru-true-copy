@@ -3,7 +3,7 @@ import { getActiveJobs } from '@/lib/db/sqlite';
 
 export async function GET() {
   try {
-    const mineruUrl = process.env.MINERU_API_URL || 'http://127.0.0.1:8765';
+    const mineruUrl = process.env.MINERU_API_URL || 'http://localhost:51820';
     const response = await fetch(`${mineruUrl}/health`, {
       signal: AbortSignal.timeout(5000),
     });

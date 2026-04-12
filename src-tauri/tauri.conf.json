@@ -5,7 +5,7 @@
   "identifier": "com.doctransform.app",
   "build": {
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:60549",
+    "devUrl": "http://localhost:51821",
     "beforeBuildCommand": "cd app && npm run build",
     "frontendDist": "splash.html"
   },

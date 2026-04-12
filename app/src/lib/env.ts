@@ -17,7 +17,7 @@ export const env = {
   modelFallback: process.env.OPENROUTER_MODEL_FALLBACK || 'google/gemini-3.1-flash-lite-preview',
 
   // MinerU
-  mineruApiUrl: process.env.MINERU_API_URL || 'http://127.0.0.1:8765',
+  mineruApiUrl: process.env.MINERU_API_URL || 'http://localhost:51820',
 
   // Firebase Web SDK (for admin app)
   firebaseApiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || '',

@@ -197,7 +197,7 @@ function handleRequest(req: http.IncomingMessage, res: http.ServerResponse): voi
   res.end(JSON.stringify({ error: 'Not found' }));
 }
 
-export function startMockMineruServer(port = 8765): http.Server {
+export function startMockMineruServer(port = 51820): http.Server {
   const server = http.createServer(handleRequest);
   server.listen(port, '127.0.0.1', () => {
     console.log(`[MinerU Mock] Running on http://127.0.0.1:${port}`);
@@ -207,6 +207,6 @@ export function startMockMineruServer(port = 8765): http.Server {
 
 // Run directly
 if (require.main === module) {
-  const port = parseInt(process.env.MINERU_PORT || '8765', 10);
+  const port = parseInt(process.env.MINERU_PORT || '51820', 10);
   startMockMineruServer(port);
 }

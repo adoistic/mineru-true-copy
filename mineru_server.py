@@ -2924,8 +2924,8 @@ def _auto_cleanup_loop():
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='MinerU REST API server')
-    parser.add_argument('--port', type=int, default=int(os.environ.get('MINERU_PORT', '8765')),
-                        help='Port to listen on (default: 8765 or MINERU_PORT env)')
+    parser.add_argument('--port', type=int, default=int(os.environ.get('MINERU_PORT', '51820')),
+                        help='Port to listen on (default: 51820 or MINERU_PORT env)')
     parser.add_argument('--models-dir', type=str, default=None,
                         help='Override models directory in magic-pdf.json')
     parser.add_argument('--no-warm', action='store_true',

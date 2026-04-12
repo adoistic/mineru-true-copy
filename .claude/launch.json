@@ -4,13 +4,13 @@
     {
       "name": "app",
       "runtimeExecutable": "/opt/homebrew/bin/node",
-      "runtimeArgs": ["node_modules/.bin/next", "dev", "--port", "53575"],
-      "port": 53575,
+      "runtimeArgs": ["node_modules/.bin/next", "dev", "--port", "51821"],
+      "port": 51821,
       "cwd": "app",
       "autoPort": false,
       "env": {
         "PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
-        "MINERU_API_URL": "http://localhost:54980"
+        "MINERU_API_URL": "http://localhost:51820"
       }
     },
     {
@@ -30,6 +30,12 @@
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "8902", "--directory", "/tmp/font_audit/html_paged"],
       "port": 8902
+    },
+    {
+      "name": "tc-review",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "8903", "--directory", "/tmp/export-test-output/iess102_rasterized_e94bc2ce/True Copy"],
+      "port": 8903
     }
   ]
 }
