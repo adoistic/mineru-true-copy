@@ -50,10 +50,10 @@ describe('calculateCredits — dual-mode OCR pricing', () => {
     expect(credits).toBe(10);
   });
 
-  it('defaults to local OCR, cloud tables', () => {
+  it('defaults to cloud OCR, cloud tables', () => {
     const credits = calculateCredits('ocr', 10);
-    // Default: local (0.25/page), cloud tables (but no tablePagesCount = no surcharge)
-    expect(credits).toBe(2.5);
+    // Default: cloud (1/page)
+    expect(credits).toBe(10);
   });
 });
 

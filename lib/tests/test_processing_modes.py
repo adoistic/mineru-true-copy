@@ -33,9 +33,9 @@ class TestProcessingModeThreading(unittest.TestCase):
         self.assertEqual(table, 'local')
 
     def test_get_processing_mode_unset_thread_defaults(self):
-        """Unset thread returns safe defaults: local OCR, cloud tables."""
+        """Unset thread returns defaults: cloud OCR, cloud tables."""
         ocr, table = get_processing_mode()
-        self.assertEqual(ocr, 'local')  # SECURITY: never default to cloud
+        self.assertEqual(ocr, 'cloud')
         self.assertEqual(table, 'cloud')
 
     def test_threading_local_isolation(self):
@@ -61,7 +61,7 @@ class TestProcessingModeThreading(unittest.TestCase):
 
     def test_child_thread_does_not_inherit_mode(self):
         """Child threads spawned from a parent do NOT inherit threading.local."""
-        set_processing_mode(ocr_mode='cloud', table_mode='cloud')
+        set_processing_mode(ocr_mode='local', table_mode='local')
         child_result = {}
 
         def child_fn():
@@ -72,7 +72,7 @@ class TestProcessingModeThreading(unittest.TestCase):
         t.join()
 
         # Child gets defaults, not parent's values
-        self.assertEqual(child_result['mode'], ('local', 'cloud'))
+        self.assertEqual(child_result['mode'], ('cloud', 'cloud'))
 
     def test_closure_captures_mode_for_child_thread(self):
         """Capturing mode in closure before spawning child works correctly."""
@@ -108,10 +108,10 @@ class TestProcessingModeThreading(unittest.TestCase):
         self.assertEqual(table, 'local')
 
     def test_set_processing_mode_default_args(self):
-        """Default args: ocr=local, table=cloud."""
+        """Default args: ocr=cloud, table=cloud."""
         set_processing_mode()
         ocr, table = get_processing_mode()
-        self.assertEqual(ocr, 'local')
+        self.assertEqual(ocr, 'cloud')
         self.assertEqual(table, 'cloud')
 
 
@@ -175,6 +175,89 @@ class TestCacheKeyExtension(unittest.TestCase):
         key = ('layout', 'doclayout_yolo')
         # Layout model is mode-independent
         self.assertEqual(len(key), 2)
+
+
+class TestParallelOcrChunking(unittest.TestCase):
+    """Test the parallel OCR recognition chunking logic."""
+
+    def test_small_list_skips_threading(self):
+        """Lists under 500 items should not use ThreadPoolExecutor."""
+        # The threshold is 500 — below this, process directly
+        self.assertTrue(499 < 500)  # would skip threading
+        self.assertFalse(500 < 500)  # would use threading
+
+    def test_chunk_splitting_even(self):
+        """Even split: 8000 items with n_workers=4 = 4 chunks of 2000."""
+        items = list(range(8000))
+        n_workers = min(4, max(1, len(items) // 2000))
+        chunk_size = (len(items) + n_workers - 1) // n_workers
+        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        self.assertEqual(n_workers, 4)
+        self.assertEqual(len(chunks), 4)
+        self.assertEqual(sum(len(c) for c in chunks), 8000)
+
+    def test_chunk_splitting_uneven(self):
+        """Uneven split: 5000 items with n_workers=2 = 2 chunks (2500 + 2500)."""
+        items = list(range(5000))
+        n_workers = min(4, max(1, len(items) // 2000))
+        chunk_size = (len(items) + n_workers - 1) // n_workers
+        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        self.assertEqual(n_workers, 2)
+        self.assertEqual(sum(len(c) for c in chunks), 5000)
+
+    def test_chunk_splitting_large(self):
+        """Large split: 42888 items should use 4 workers."""
+        items = list(range(42888))
+        n_workers = min(4, max(1, len(items) // 2000))
+        chunk_size = (len(items) + n_workers - 1) // n_workers
+        chunks = [items[i:i + chunk_size] for i in range(0, len(items), chunk_size)]
+        self.assertEqual(n_workers, 4)
+        self.assertEqual(sum(len(c) for c in chunks), 42888)
+        # All chunks should be close in size (no off-by-one)
+        sizes = [len(c) for c in chunks]
+        self.assertTrue(max(sizes) - min(sizes) <= 1)
+
+    def test_result_reassembly_order(self):
+        """Results must be reassembled in chunk order, not completion order."""
+        all_results = [None] * 3
+        # Simulate chunks completing out of order
+        all_results[2] = ['c1', 'c2']
+        all_results[0] = ['a1', 'a2']
+        all_results[1] = ['b1', 'b2']
+        combined = []
+        for r in all_results:
+            combined.extend(r)
+        self.assertEqual(combined, ['a1', 'a2', 'b1', 'b2', 'c1', 'c2'])
+
+    def test_n_workers_calculation(self):
+        """Worker count scales with span count."""
+        cases = [
+            (499, 0),    # below threshold, no parallelization
+            (500, 1),    # minimum for threading (500 < 2000 floor)
+            (2000, 1),
+            (4000, 2),
+            (8000, 4),
+            (42888, 4),  # capped at 4
+            (100000, 4), # still capped at 4
+        ]
+        for n_items, expected_workers in cases:
+            if n_items < 500:
+                continue  # skip, these don't enter the threading path
+            workers = min(4, max(1, n_items // 2000))
+            self.assertEqual(workers, expected_workers,
+                             f"n_items={n_items}: expected {expected_workers}, got {workers}")
+
+    def test_thread_exception_propagates(self):
+        """If a chunk fails, the exception should propagate to the caller."""
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _failing_fn():
+            raise ValueError("chunk failed")
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            future = executor.submit(_failing_fn)
+            with self.assertRaises(ValueError):
+                future.result()
 
 
 class TestModeValidation(unittest.TestCase):

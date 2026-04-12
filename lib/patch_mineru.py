@@ -329,21 +329,57 @@ def patch():
                         get_429_count())
 
         def _run_ocr_rec():
-            """Phase 4: OCR recognition (uses captured _ocr_mode)."""
+            """Phase 4: OCR recognition (uses captured _ocr_mode).
+
+            For local mode with large span counts, splits into chunks and
+            processes in parallel threads. CRNN is stateless, numpy/cv2
+            release GIL during C-level work, torch GPU releases GIL.
+            Threads overlap CPU preprocessing with GPU inference.
+            """
             if not img_crop_lists_by_lang:
                 return
             t_start = time.time()
 
             for lang, img_crop_list in img_crop_lists_by_lang.items():
-                if len(img_crop_list) > 0:
-                    ocr_model = ocr_model_by_lang[lang]
+                if len(img_crop_list) == 0:
+                    continue
+                ocr_model = ocr_model_by_lang[lang]
+
+                if len(img_crop_list) < 500 or _ocr_mode == 'cloud':
+                    # Small lists or cloud mode: process directly
                     ocr_res_list = ocr_model.ocr(
                         img_crop_list, det=False, tqdm_enable=True)[0]
-                    assert len(ocr_res_list) == len(need_ocr_lists_by_lang[lang])
-                    for index, item in enumerate(need_ocr_lists_by_lang[lang]):
-                        ocr_text, ocr_score = ocr_res_list[index]
-                        item['text'] = ocr_text
-                        item['score'] = float(f"{ocr_score:.3f}")
+                else:
+                    # Large local list: chunk and parallelize
+                    n_workers = min(4, max(1, len(img_crop_list) // 2000))
+                    chunk_size = (len(img_crop_list) + n_workers - 1) // n_workers
+                    chunks = [img_crop_list[i:i + chunk_size]
+                              for i in range(0, len(img_crop_list), chunk_size)]
+
+                    all_results = [None] * len(chunks)
+
+                    def _process_chunk(idx, chunk):
+                        all_results[idx] = ocr_model.ocr(
+                            chunk, det=False, tqdm_enable=False)[0]
+
+                    logger.info("[patch_mineru] OCR rec: %d spans, %d chunks, "
+                                "%d workers", len(img_crop_list), len(chunks),
+                                n_workers)
+                    with ThreadPoolExecutor(max_workers=n_workers) as executor:
+                        futures = [executor.submit(_process_chunk, i, c)
+                                   for i, c in enumerate(chunks)]
+                        for f in futures:
+                            f.result()
+
+                    ocr_res_list = []
+                    for r in all_results:
+                        ocr_res_list.extend(r)
+
+                assert len(ocr_res_list) == len(need_ocr_lists_by_lang[lang])
+                for index, item in enumerate(need_ocr_lists_by_lang[lang]):
+                    ocr_text, ocr_score = ocr_res_list[index]
+                    item['text'] = ocr_text
+                    item['score'] = float(f"{ocr_score:.3f}")
 
             elapsed = time.time() - t_start
             total_spans = sum(len(v) for v in img_crop_lists_by_lang.values())
