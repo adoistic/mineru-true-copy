@@ -1,90 +1,162 @@
 """
-Monkey-patch MinerU to use VisionLLM for OCR and table extraction.
+Monkey-patch MinerU for dual-mode OCR: Local Processing + Cloud Processing.
 
-Replaces:
-  - PytorchPaddleOCR → VisionLLMOCR (text recognition via OpenRouter VLM)
-  - RapidTable → VisionLLMTableModel (table extraction via OpenRouter VLM)
+Modes:
+  - local: PytorchPaddleOCR (native, offline, GPU) + RapidTable (CPU)
+  - cloud: VisionLLMOCR (OpenRouter API) + VisionLLMTableModel (OpenRouter API)
+
+OCR and table modes are independently selectable per request via threading.local().
+SECURITY: defaults to local OCR so data never leaves the machine by accident.
 
 Usage: import lib.patch_mineru  # before any MinerU imports
 """
 import logging
 import sys
+import threading
 
 logger = logging.getLogger('patch_mineru')
 
+# ---------------------------------------------------------------------------
+# Per-request mode routing via threading.local()
+# ---------------------------------------------------------------------------
+#
+#   REQUEST FLOW:
+#   HTTP handler → process_pdf() → set_processing_mode() → ds.apply()
+#     → BatchAnalyze.__call__() → AtomModelSingleton.get_atom_model()
+#       → _patched_atom_model_init() → PaddleOCR or VisionLLMOCR
+#
+#   The mode is set on the worker thread. Child threads (table rec, OCR rec)
+#   do NOT inherit threading.local — the patched BatchAnalyze.__call__
+#   captures mode in closures before spawning children.
+
+_request_context = threading.local()
+
+
+def set_processing_mode(ocr_mode='local', table_mode='cloud'):
+    """Set OCR and table engine mode for the current thread.
+
+    Called from process_pdf() before ds.apply(). Thread-safe via threading.local().
+
+    SECURITY: Defaults are local/cloud (not cloud/cloud) so that if the
+    thread-local is somehow unset, data never leaves the machine by accident.
+    OCR defaults to local (safe). Tables default to cloud (better accuracy).
+    """
+    _request_context.ocr_mode = ocr_mode
+    _request_context.table_mode = table_mode
+
+
+def get_processing_mode():
+    """Read OCR and table mode for the current thread.
+
+    SECURITY: Default to 'local' for OCR if thread-local is unset.
+    Never default to 'cloud' for OCR — compliance users must never
+    have data sent externally without explicit opt-in.
+    """
+    return (
+        getattr(_request_context, 'ocr_mode', 'local'),
+        getattr(_request_context, 'table_mode', 'cloud'),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Per-key model locks (avoids blocking cloud behind local model load)
+# ---------------------------------------------------------------------------
+
+_key_locks: dict[tuple, threading.Lock] = {}
+_key_locks_meta = threading.Lock()
+
+
+def _get_key_lock(key: tuple) -> threading.Lock:
+    """Get or create a lock for a specific model cache key."""
+    with _key_locks_meta:
+        if key not in _key_locks:
+            _key_locks[key] = threading.Lock()
+        return _key_locks[key]
+
+
+# ---------------------------------------------------------------------------
+# Patch entry point
+# ---------------------------------------------------------------------------
 
 def patch():
-    """Replace MinerU's OCR and table models with VisionLLM versions."""
+    """Patch MinerU for dual-mode OCR/table routing."""
     from lib import vision_llm_ocr
 
     # 1. Register our module so any `from ... import vision_llm_ocr` finds ours
     target = 'magic_pdf.model.sub_modules.ocr.paddleocr2pytorch.vision_llm_ocr'
     sys.modules[target] = vision_llm_ocr
 
-    # 2. Patch atom_model_init to intercept OCR and Table model creation
+    # 2. Patch atom_model_init for conditional OCR/Table routing
     import magic_pdf.model.sub_modules.model_init as model_init
+    from magic_pdf.model.sub_modules.model_init import AtomModelSingleton, AtomicModel
 
     _original_atom_init = model_init.atom_model_init
 
     def _patched_atom_model_init(model_name, **kwargs):
-        import logging
-        logging.getLogger('patch_mineru').info(
-            f'[patch_mineru] atom_model_init called with model_name={model_name}'
-        )
-        # Intercept OCR model init — VisionLLMOCR instead of PytorchPaddleOCR
-        if model_name == model_init.AtomicModel.OCR:
-            lang = kwargs.get('lang') or 'ch'
-            return vision_llm_ocr.VisionLLMOCR(lang=lang)
-        # Intercept Table model init — VisionLLMTableModel instead of RapidTable
-        if model_name == model_init.AtomicModel.Table:
-            logging.getLogger('patch_mineru').info(
-                '[patch_mineru] Intercepting Table model — using VisionLLMTableModel'
-            )
-            return vision_llm_ocr.VisionLLMTableModel()
+        """Route model creation based on per-request processing mode."""
+        ocr_mode, table_mode = get_processing_mode()
+
+        if model_name == AtomicModel.OCR:
+            if ocr_mode == 'local':
+                logger.info('[patch_mineru] OCR model: local (PaddleOCR)')
+                return _original_atom_init(model_name, **kwargs)
+            else:
+                lang = kwargs.get('lang') or 'ch'
+                logger.info('[patch_mineru] OCR model: cloud (VisionLLM), lang=%s', lang)
+                return vision_llm_ocr.VisionLLMOCR(lang=lang)
+
+        if model_name == AtomicModel.Table:
+            if table_mode == 'local':
+                logger.info('[patch_mineru] Table model: local (RapidTable)')
+                return _original_atom_init(model_name, **kwargs)
+            else:
+                logger.info('[patch_mineru] Table model: cloud (VisionLLM)')
+                # Cloud constructor takes no kwargs — don't forward local-only kwargs
+                return vision_llm_ocr.VisionLLMTableModel()
+
         return _original_atom_init(model_name, **kwargs)
 
     model_init.atom_model_init = _patched_atom_model_init
 
-    # 3. Patch BatchAnalyze to preserve figure blocks (category_id=3).
-    #
-    # MinerU's default logic reclassifies figures as plain_text (category_id=1)
-    # when >25% of the figure area contains detected text boxes. This causes
-    # ALL figures in rasterized/scanned PDFs to be lost because our OCR
-    # detector finds text everywhere. We raise the threshold to 80% so only
-    # regions that are almost entirely text get reclassified.
+    # 3. Patch AtomModelSingleton.get_atom_model to include mode in cache key
+    _original_get_atom_model = AtomModelSingleton.get_atom_model
+
+    def _patched_get_atom_model(self, atom_model_name: str, **kwargs):
+        """Extended cache key includes processing mode for dual-engine support."""
+        ocr_mode, table_mode = get_processing_mode()
+        lang = kwargs.get('lang')
+
+        if atom_model_name == AtomicModel.OCR:
+            key = (atom_model_name, lang, ocr_mode)
+        elif atom_model_name == AtomicModel.Table:
+            key = (atom_model_name, kwargs.get('table_model_name'), lang, table_mode)
+        elif atom_model_name == AtomicModel.Layout:
+            key = (atom_model_name, kwargs.get('layout_model_name'))
+        else:
+            key = (atom_model_name,)
+
+        key_lock = _get_key_lock(key)
+        with key_lock:
+            if key not in self._models:
+                self._models[key] = model_init.atom_model_init(
+                    model_name=atom_model_name, **kwargs)
+            return self._models[key]
+
+    AtomModelSingleton.get_atom_model = _patched_get_atom_model
+
+    # 4. Patch BatchAnalyze to preserve figure blocks + conditional concurrency
     import magic_pdf.model.batch_analyze as batch_analyze
+    from magic_pdf.config.constants import MODEL_NAME
 
-    _OrigBatchAnalyzeCall = batch_analyze.BatchAnalyze.__call__
-
-    def _patched_batch_call(self, images_with_extra_info):
-        results = _OrigBatchAnalyzeCall(self, images_with_extra_info)
-        return results
-
-    # Monkey-patch the reclassification threshold inline
-    import magic_pdf.model.sub_modules.model_utils as model_utils
-    _original_get_coords_and_area = model_utils.get_coords_and_area
-
-    # Instead of patching the call, patch the source: raise the threshold
-    # by modifying the batch_analyze module's __call__ at the bytecode level
-    # is fragile. Instead, we patch get_ocr_result_list to tag figure OCR
-    # results, then intercept the reclassification.
-    #
-    # Simplest approach: patch the batch_analyze source to use a higher
-    # threshold. We do this by replacing the __call__ method.
-    import types
-
-    # Note: inspect.getsource() is not available in PyInstaller bundles,
-    # but the source check below was dead code anyway (just `pass`).
-    # The actual patch is the _patched_call method replacement below.
-
-    # Direct approach: copy and patch the method
     def _patched_call(self, images_with_extra_info):
-        """BatchAnalyze.__call__ with raised figure→text reclassification threshold."""
+        """BatchAnalyze.__call__ with figure preservation + dual-mode concurrency.
+
+        Captures processing mode from the worker thread BEFORE spawning child
+        threads, since threading.local() values are NOT inherited by children.
+        """
         import time
         import cv2
         from tqdm import tqdm
-        from magic_pdf.config.constants import MODEL_NAME
-        from magic_pdf.model.sub_modules.model_init import AtomModelSingleton
         from magic_pdf.model.sub_modules.model_utils import (
             crop_img, get_res_list_from_layout_res, get_coords_and_area)
         from magic_pdf.model.sub_modules.ocr.paddleocr2pytorch.ocr_utils import (
@@ -92,6 +164,11 @@ def patch():
 
         if len(images_with_extra_info) == 0:
             return []
+
+        # ---- Capture mode from worker thread (before spawning children) ----
+        _ocr_mode, _table_mode = get_processing_mode()
+        logger.info('[patch_mineru] BatchAnalyze: ocr_mode=%s, table_mode=%s',
+                    _ocr_mode, _table_mode)
 
         images_layout_res = []
         self.model = self.model_manager.get_model(
@@ -158,7 +235,7 @@ def patch():
                         ocr_res, useful_list, ocr_res_list_dict['ocr_enable'],
                         new_image, _lang)
 
-                    # PATCHED: skip figure→text reclassification entirely.
+                    # PATCHED: skip figure->text reclassification entirely.
                     # MinerU's default reclassifies figures as text when >25%
                     # of the area has OCR text. For rasterized PDFs our OCR
                     # detector finds text everywhere, so ALL figures would
@@ -169,8 +246,6 @@ def patch():
                     ocr_res_list_dict['layout_res'].extend(ocr_result_list)
 
         # ---- Collect data for concurrent phases ----
-        # OCR rec data must be collected BEFORE launching threads
-        # (reads from images_layout_res, pops np_img/lang keys)
         need_ocr_lists_by_lang = {}
         img_crop_lists_by_lang = {}
         for layout_res in images_layout_res:
@@ -186,7 +261,7 @@ def patch():
                         item.pop('np_img')
                         item.pop('lang')
 
-        # Get models ONCE before threads (AtomModelSingleton is not thread-safe)
+        # Get models ONCE before threads (on worker thread where threading.local is set)
         atom_model_manager = AtomModelSingleton()
         ocr_model_by_lang = {}
         for lang in img_crop_lists_by_lang:
@@ -201,7 +276,7 @@ def patch():
                 table_model_path='', table_max_time=400,
                 device='cpu', lang='en', table_sub_model_name='slanet_plus')
 
-        # ---- Define phase functions ----
+        # ---- Define phase functions (use captured _ocr_mode/_table_mode) ----
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import threading as _threading
         from lib.vision_llm_ocr import reset_429_count, get_429_count
@@ -209,7 +284,7 @@ def patch():
         reset_429_count()
 
         def _run_table_rec():
-            """Phase 3: Parallel table recognition via VLM."""
+            """Phase 3: Table recognition (uses captured _table_mode)."""
             if not table_model or not table_res_list_all_page:
                 return
             t_start = time.time()
@@ -222,22 +297,28 @@ def patch():
                     if expected_ending:
                         table_res_dict['table_res']['html'] = html_code
 
-            max_workers = min(len(table_res_list_all_page), 30)
+            # Concurrency: local RapidTable on CPU caps at 4, cloud API at 30
+            if _table_mode == 'local':
+                max_workers = min(len(table_res_list_all_page), 4)
+            else:
+                max_workers = min(len(table_res_list_all_page), 30)
+
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(_process_table, t) for t in table_res_list_all_page]
                 for f in as_completed(futures):
                     try:
                         f.result()
                     except Exception as exc:
-                        logger.warning(f"[patch_mineru] Table recognition failed: {exc}")
+                        logger.warning("[patch_mineru] Table recognition failed: %s", exc)
 
             elapsed = time.time() - t_start
-            logger.info(f"[patch_mineru] Phase 3 (table rec): {elapsed:.1f}s, "
-                        f"{len(table_res_list_all_page)} tables, "
-                        f"429s so far: {get_429_count()}")
+            logger.info("[patch_mineru] Phase 3 (table rec, mode=%s): %.1fs, "
+                        "%d tables, 429s so far: %d",
+                        _table_mode, elapsed, len(table_res_list_all_page),
+                        get_429_count())
 
         def _run_ocr_rec():
-            """Phase 4: Parallel OCR recognition via VLM."""
+            """Phase 4: OCR recognition (uses captured _ocr_mode)."""
             if not img_crop_lists_by_lang:
                 return
             t_start = time.time()
@@ -255,9 +336,9 @@ def patch():
 
             elapsed = time.time() - t_start
             total_spans = sum(len(v) for v in img_crop_lists_by_lang.values())
-            logger.info(f"[patch_mineru] Phase 4 (OCR rec): {elapsed:.1f}s, "
-                        f"{total_spans} spans, "
-                        f"429s so far: {get_429_count()}")
+            logger.info("[patch_mineru] Phase 4 (OCR rec, mode=%s): %.1fs, "
+                        "%d spans, 429s so far: %d",
+                        _ocr_mode, elapsed, total_spans, get_429_count())
 
         # ---- Run Phase 3 + Phase 4 concurrently ----
         t_concurrent_start = time.time()
@@ -268,20 +349,15 @@ def patch():
         table_thread.join()
         ocr_thread.join()
         t_concurrent_end = time.time()
-        logger.info(f"[patch_mineru] Phases 3+4 concurrent total: "
-                    f"{t_concurrent_end - t_concurrent_start:.1f}s, "
-                    f"total 429s: {get_429_count()}")
+        logger.info("[patch_mineru] Phases 3+4 concurrent total: %.1fs, "
+                    "total 429s: %d",
+                    t_concurrent_end - t_concurrent_start, get_429_count())
 
         return images_layout_res
 
     batch_analyze.BatchAnalyze.__call__ = _patched_call
 
-    # 4. Fix UniMerNet / transformers 4.38+ incompatibility.
-    #
-    # transformers>=4.38 injects `cache_position` into model_inputs during
-    # generation. VisionEncoderDecoderModel.forward() passes it to the decoder,
-    # but UnimerMBartForCausalLM.forward() doesn't accept it (no **kwargs).
-    # Patch: accept and discard cache_position.
+    # 5. Fix UniMerNet / transformers 4.38+ incompatibility.
     try:
         from magic_pdf.model.sub_modules.mfr.unimernet.unimernet_hf.unimer_mbart.modeling_unimer_mbart import UnimerMBartForCausalLM
 
@@ -293,25 +369,17 @@ def patch():
         UnimerMBartForCausalLM.forward = _patched_unimer_forward
         logger.info('[patch_mineru] Patched UnimerMBartForCausalLM.forward for cache_position compat')
 
-        # Also patch UnimerMBartDecoder.forward to handle DynamicCache.
-        # transformers 4.38+ uses DynamicCache instead of tuple-of-tuples for
-        # past_key_values. UnimerMBartDecoder.forward() at line 1419 does:
-        #   past_key_values[0][0].shape[2]
-        # which crashes when DynamicCache entries are None on first pass.
         from magic_pdf.model.sub_modules.mfr.unimernet.unimernet_hf.unimer_mbart.modeling_unimer_mbart import UnimerMBartDecoder
 
         _original_decoder_forward = UnimerMBartDecoder.forward
 
         def _patched_decoder_forward(self, *args, past_key_values=None, **kwargs):
-            # Convert DynamicCache to None if it has no cached values yet
             if past_key_values is not None:
                 try:
-                    # DynamicCache: check if it has any real content
                     if hasattr(past_key_values, 'get_seq_length'):
                         if past_key_values.get_seq_length() == 0:
                             past_key_values = None
                     elif isinstance(past_key_values, (list, tuple)):
-                        # Tuple format: check if first entry is valid
                         if len(past_key_values) > 0 and past_key_values[0] is not None:
                             if past_key_values[0][0] is None:
                                 past_key_values = None

@@ -394,6 +394,77 @@ _parse_semaphore = threading.Semaphore(_max_ocr_concurrent)
 # Server readiness state — starts as "warming" until models are pre-loaded
 _server_status = "warming"
 
+# ---------------------------------------------------------------------------
+# Health check helpers for dual-mode OCR
+# ---------------------------------------------------------------------------
+
+_cloud_probe_result = None
+_cloud_probe_time = 0.0
+
+
+def _check_cloud_available() -> bool:
+    """Check if cloud processing (OpenRouter API) is available.
+
+    Probes the API once, then caches result for 60 seconds.
+    Returns False if no API key or if the key is invalid/expired.
+    """
+    global _cloud_probe_result, _cloud_probe_time
+    if time.time() - _cloud_probe_time < 60:
+        return _cloud_probe_result
+
+    key = os.environ.get('OPENROUTER_API_KEY', '')
+    if not key:
+        _cloud_probe_result = False
+        _cloud_probe_time = time.time()
+        return False
+
+    try:
+        import urllib.request
+        req = urllib.request.Request(
+            'https://openrouter.ai/api/v1/models',
+            headers={'Authorization': f'Bearer {key}'},
+        )
+        resp = urllib.request.urlopen(req, timeout=2)
+        _cloud_probe_result = resp.status == 200
+    except Exception:
+        _cloud_probe_result = False
+
+    _cloud_probe_time = time.time()
+    return _cloud_probe_result
+
+
+_local_models_result = None
+_local_models_time = 0.0
+
+
+def _check_local_models_exist() -> bool:
+    """Check if PaddleOCR model files exist on disk.
+
+    Probes the filesystem once, then caches result for 60 seconds.
+    Models don't get installed/removed while the server is running.
+    """
+    global _local_models_result, _local_models_time
+    if time.time() - _local_models_time < 60:
+        return _local_models_result
+
+    try:
+        # Read models-dir from magic-pdf.json config
+        config_path = os.path.join(os.path.expanduser('~'), 'magic-pdf.json')
+        if os.path.exists(config_path):
+            with open(config_path) as f:
+                config = json.load(f)
+            models_dir = config.get('models-dir', '')
+            # Check for PaddleOCR detection model (most essential file)
+            det_dir = os.path.join(models_dir, 'MinerU', 'paddleocr')
+            _local_models_result = os.path.isdir(det_dir)
+        else:
+            _local_models_result = False
+    except Exception:
+        _local_models_result = False
+
+    _local_models_time = time.time()
+    return _local_models_result
+
 
 def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     """Post-process MinerU results to crop equation spans from the PDF.
@@ -529,12 +600,23 @@ def _unmerge_cross_page_blocks(pdf_info: list) -> None:
 
 def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | None = None):
     """Run full MinerU OCR pipeline and store the structured result."""
+    from lib.patch_mineru import set_processing_mode
+
     # Block here until a slot is free. This is the backpressure point: callers
     # can submit thousands of tasks; they sit in 'pending' status until the
     # semaphore releases. No 429s, no fail-and-retry storms.
     _parse_semaphore.acquire()
     acquired = True
     try:
+        # Set per-request processing mode via threading.local()
+        # SECURITY: defaults to local OCR (never send data externally by accident)
+        _config = config or {}
+        ocr_mode = _config.get('ocr_mode', 'local')
+        table_mode = _config.get('table_mode', 'cloud')
+        set_processing_mode(ocr_mode=ocr_mode, table_mode=table_mode)
+        logger.info('Processing mode: ocr=%s, table=%s',
+                    ocr_mode, table_mode, extra={'task_id': task_id})
+
         # Disk-space pre-flight: reject if < 2GB free to prevent the error-spam
         # feedback loop that crashed the laptop (6.7GB log from failed writes)
         import shutil as _shutil_check
@@ -920,6 +1002,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             tasks[task_id]['error'] = f'{e} | at: {location}'
         logger.error('Task %s failed: %s', task_id, e, extra={'task_id': task_id})
     finally:
+        # Clear threading.local so stale mode doesn't leak to next request on this thread
+        set_processing_mode(ocr_mode='local', table_mode='local')
         # Ensure fitz doc is closed even on error (may already be closed on success path)
         try:
             _fitz_doc.close()
@@ -2289,7 +2373,12 @@ class MineruHandler(BaseHTTPRequestHandler):
         if parsed.path == '/health':
             global _server_status
             code = 200 if _server_status == 'ok' else 503
-            self._send_json(code, {'status': _server_status})
+            self._send_json(code, {
+                'status': _server_status,
+                'cloud_available': _check_cloud_available(),
+                'local_available': _check_local_models_exist(),
+                'modes': ['local', 'cloud'],
+            })
             return
 
         # GET /tasks/{task_id}
@@ -2405,7 +2494,12 @@ class MineruHandler(BaseHTTPRequestHandler):
         if parsed.path == '/health':
             global _server_status
             code = 200 if _server_status == 'ok' else 503
-            self._send_json(code, {'status': _server_status})
+            self._send_json(code, {
+                'status': _server_status,
+                'cloud_available': _check_cloud_available(),
+                'local_available': _check_local_models_exist(),
+                'modes': ['local', 'cloud'],
+            })
             return
 
         if parsed.path == '/file_parse':
@@ -2518,12 +2612,24 @@ class MineruHandler(BaseHTTPRequestHandler):
         # Concurrency limit is enforced inside the worker thread (blocking acquire),
         # so HTTP submissions never fail with 429 — they queue as 'pending' tasks.
 
+        # Validate processing mode
+        ocr_mode = fields.get('processing_mode', 'local')
+        table_mode = fields.get('table_mode', 'cloud')
+        if ocr_mode not in ('local', 'cloud'):
+            self._send_json(400, {'error': f'Invalid processing_mode: {ocr_mode}. Must be "local" or "cloud".'})
+            return
+        if table_mode not in ('local', 'cloud'):
+            self._send_json(400, {'error': f'Invalid table_mode: {table_mode}. Must be "local" or "cloud".'})
+            return
+
         # Parse display preferences from form fields
         config = {
             'formula_display': fields.get('formula_display', 'image'),
             'table_display': fields.get('table_display', 'rendered'),
             'include_figures': fields.get('include_figures', 'true').lower() != 'false',
             'figure_display': fields.get('figure_display', 'image'),
+            'ocr_mode': ocr_mode,
+            'table_mode': table_mode,
         }
 
         # Create task and start processing
