@@ -223,5 +223,55 @@ class TestErrorCodes(unittest.TestCase):
         self.assertNotIn('OpenRouter', result['error'])
 
 
+class TestModelValidation(unittest.TestCase):
+    """Test model file validation for bundled app distribution."""
+
+    def test_validate_models_returns_structure(self):
+        """_validate_models returns dict with core_ok, local_ocr_ok, missing."""
+        import mineru_server
+        result = mineru_server._validate_models('/nonexistent/path')
+        self.assertIn('core_ok', result)
+        self.assertIn('local_ocr_ok', result)
+        self.assertIn('missing', result)
+        self.assertIsInstance(result['missing'], list)
+
+    def test_validate_models_missing_dir(self):
+        """Missing models directory reports all models as missing."""
+        import mineru_server
+        result = mineru_server._validate_models('/nonexistent/path')
+        self.assertFalse(result['core_ok'])
+        self.assertFalse(result['local_ocr_ok'])
+        self.assertGreater(len(result['missing']), 0)
+
+    def test_validate_models_with_real_dir(self):
+        """If models exist at the configured path, validation passes."""
+        import mineru_server
+        models_dir = mineru_server._get_models_dir()
+        if not models_dir:
+            self.skipTest('No models-dir configured')
+        result = mineru_server._validate_models(models_dir)
+        # Core models should be present on the dev machine
+        self.assertTrue(result['core_ok'],
+                        f"Core models missing: {result['missing']}")
+
+    def test_check_local_models_returns_bool(self):
+        """_check_local_models_exist returns a boolean."""
+        import mineru_server
+        result = mineru_server._check_local_models_exist()
+        self.assertIsInstance(result, bool)
+
+    def test_check_local_models_caches_result(self):
+        """Second call within 60s returns cached result (no disk I/O)."""
+        import mineru_server
+        # First call populates cache
+        result1 = mineru_server._check_local_models_exist()
+        # Second call should be instant (cached)
+        t0 = time.time()
+        result2 = mineru_server._check_local_models_exist()
+        elapsed = time.time() - t0
+        self.assertEqual(result1, result2)
+        self.assertLess(elapsed, 0.01)  # cached, no disk I/O
+
+
 if __name__ == '__main__':
     unittest.main()

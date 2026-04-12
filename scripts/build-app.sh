@@ -83,6 +83,26 @@ else
     echo "  WARNING: layoutreader not found at $LAYOUTREADER_SRC"
 fi
 
+# PaddleOCR models (local OCR engine for dual-mode) — ~779MB
+OCR_SRC="$MODELS_SRC/OCR"
+if [ -d "$OCR_SRC" ]; then
+    echo "  Copying OCR/ (PaddleOCR, local processing mode)..."
+    cp -r "$OCR_SRC" "$MODELS_DST/"
+else
+    echo "  WARNING: PaddleOCR models not found at $OCR_SRC"
+    echo "  Local Processing mode will be unavailable in the built app."
+fi
+
+# RapidTable models (local table extraction) — ~50MB
+TABREC_SRC="$MODELS_SRC/TabRec"
+if [ -d "$TABREC_SRC" ]; then
+    echo "  Copying TabRec/ (RapidTable, local table extraction)..."
+    cp -r "$TABREC_SRC" "$MODELS_DST/"
+else
+    echo "  WARNING: RapidTable models not found at $TABREC_SRC"
+    echo "  Local table extraction will be unavailable."
+fi
+
 MODELS_SIZE=$(du -sh "$MODELS_DST" | cut -f1)
 echo "  Models total: $MODELS_SIZE"
 echo ""

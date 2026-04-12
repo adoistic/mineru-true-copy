@@ -471,6 +471,52 @@ _local_models_result = None
 _local_models_time = 0.0
 
 
+def _get_models_dir() -> str:
+    """Read the models directory from magic-pdf.json config."""
+    config_path = os.path.join(os.path.expanduser('~'), 'magic-pdf.json')
+    if os.path.exists(config_path):
+        with open(config_path) as f:
+            return json.load(f).get('models-dir', '')
+    return ''
+
+
+# Required model files for each capability.
+# Path is relative to models_dir.
+_CORE_MODELS = {
+    'Layout/YOLO/doclayout_yolo_ft.pt': 'Layout detection',
+    'MFD/YOLO/yolo_v8_ft.pt': 'Formula detection',
+}
+_LOCAL_OCR_MODELS = {
+    'OCR/paddleocr_torch': 'Text recognition (PaddleOCR)',
+}
+
+
+def _validate_models(models_dir: str) -> dict:
+    """Check which model groups are present on disk.
+
+    Returns dict with 'core_ok', 'local_ocr_ok', and 'missing' list.
+    """
+    missing = []
+    for path, name in _CORE_MODELS.items():
+        full = os.path.join(models_dir, path)
+        if not os.path.exists(full):
+            missing.append(f'{name} ({path})')
+    core_ok = len(missing) == 0
+
+    local_missing = []
+    for path, name in _LOCAL_OCR_MODELS.items():
+        full = os.path.join(models_dir, path)
+        if not os.path.exists(full) and not os.path.isdir(full):
+            local_missing.append(f'{name} ({path})')
+    local_ocr_ok = len(local_missing) == 0
+
+    return {
+        'core_ok': core_ok,
+        'local_ocr_ok': local_ocr_ok,
+        'missing': missing + local_missing,
+    }
+
+
 def _check_local_models_exist() -> bool:
     """Check if PaddleOCR model files exist on disk.
 
@@ -482,15 +528,10 @@ def _check_local_models_exist() -> bool:
         return _local_models_result
 
     try:
-        # Read models-dir from magic-pdf.json config
-        config_path = os.path.join(os.path.expanduser('~'), 'magic-pdf.json')
-        if os.path.exists(config_path):
-            with open(config_path) as f:
-                config = json.load(f)
-            models_dir = config.get('models-dir', '')
-            # Check for PaddleOCR detection model (most essential file)
-            det_dir = os.path.join(models_dir, 'MinerU', 'paddleocr')
-            _local_models_result = os.path.isdir(det_dir)
+        models_dir = _get_models_dir()
+        if models_dir:
+            validation = _validate_models(models_dir)
+            _local_models_result = validation['local_ocr_ok']
         else:
             _local_models_result = False
     except Exception:
@@ -2771,9 +2812,30 @@ def _pre_warm_models():
 
     Runs a tiny dummy inference to force torch/ONNX to load weights into memory.
     Updates _server_status to 'ok' when done.
+
+    Validates model files exist before attempting warm-up. Reports missing
+    models clearly instead of crashing with a cryptic FileNotFoundError.
     """
     global _server_status
     try:
+        # Validate model files before attempting warm-up
+        models_dir = _get_models_dir()
+        if models_dir:
+            validation = _validate_models(models_dir)
+            if validation['missing']:
+                for m in validation['missing']:
+                    logger.warning('Missing model: %s', m)
+            if not validation['core_ok']:
+                logger.error('Core models missing — cannot start. '
+                             'Missing: %s', ', '.join(validation['missing']))
+                _server_status = 'models_missing'
+                sys.exit(1)
+            if not validation['local_ocr_ok']:
+                logger.warning('PaddleOCR models missing — Local Processing will be unavailable. '
+                               'Cloud Processing will still work.')
+        else:
+            logger.warning('No models-dir configured in magic-pdf.json')
+
         logger.info('Pre-warming models...')
         t0 = time.time()
 
