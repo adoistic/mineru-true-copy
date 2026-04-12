@@ -391,6 +391,16 @@ def _calc_ocr_slots():
 _max_ocr_concurrent = _calc_ocr_slots()
 _parse_semaphore = threading.Semaphore(_max_ocr_concurrent)
 
+# GPU pipeline lock: serializes GPU-heavy model inference (Step 1) so documents
+# don't thrash the GPU. CPU-heavy stages (Steps 2-4) run in parallel.
+#
+#   Doc 1:  [===GPU: layout+OCR===] [==CPU: merge+build==]
+#   Doc 2:          (waiting)        [===GPU: layout+OCR===] [==CPU: merge+build==]
+#
+# Without this lock, 3 docs fighting for MPS GPU takes 180s+ each.
+# With pipelining, each doc takes ~15-30s GPU + CPU work overlaps.
+_gpu_lock = threading.Lock()
+
 # Server readiness state — starts as "warming" until models are pre-loaded
 _server_status = "warming"
 
@@ -718,22 +728,27 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         ds = PymuDocDataset(pdf_bytes, lang='en')
 
         # Step 1: Model inference (layout detection + OCR)
-        # formula_enable controls UniMerNet (LaTeX recognition), NOT formula detection.
-        # The layout model always detects equation bounding boxes regardless.
-        # When formula_display='image', we still need detection (for bounding boxes to crop)
-        # but can skip LaTeX recognition (UniMerNet) since we'll show images.
-        # HOWEVER: MinerU's formula_enable=False skips the ENTIRE formula pipeline,
-        # including detection. So we must always enable it.
+        # GPU-heavy: layout (DocLayout-YOLO), formula (MFD+UniMerNet), OCR (PaddleOCR/VLM)
+        # Serialized via _gpu_lock so concurrent documents don't thrash the GPU.
+        # CPU-only stages (Steps 2+) run in parallel after GPU lock is released.
         formula_enable = True
         table_enable = config.get('table_display') != 'image'
         t1 = time.time()
-        infer_result = ds.apply(
-            doc_analyze,
-            ocr=True,
-            lang='en',
-            formula_enable=formula_enable,
-            table_enable=table_enable,
-        )
+        logger.info('Waiting for GPU lock...', extra={'task_id': task_id})
+        with _gpu_lock:
+            t1_acquired = time.time()
+            wait_time = t1_acquired - t1
+            if wait_time > 0.1:
+                logger.info('GPU lock acquired after %.1fs wait', wait_time,
+                            extra={'task_id': task_id})
+            infer_result = ds.apply(
+                doc_analyze,
+                ocr=True,
+                lang='en',
+                formula_enable=formula_enable,
+                table_enable=table_enable,
+            )
+        # GPU lock released — next document can start inference immediately
         skipped = []
         if not formula_enable:
             skipped.append('UniMerNet (formula)')
@@ -742,7 +757,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         if skipped:
             logger.info('Skipped: %s', ', '.join(skipped), extra={'task_id': task_id})
         t2 = time.time()
-        logger.info('Step 1 (model inference): %.1fs', t2 - t1,
+        logger.info('Step 1 (model inference): %.1fs (%.1fs wait + %.1fs GPU)',
+                    t2 - t1, t1_acquired - t1, t2 - t1_acquired,
                     extra={'task_id': task_id, 'duration_ms': round((t2 - t1) * 1000)})
 
         # Step 2: Run full pipeline (paragraph merging, heading detection,
