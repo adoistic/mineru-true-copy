@@ -487,7 +487,8 @@ _CORE_MODELS = {
     'MFD/YOLO/yolo_v8_ft.pt': 'Formula detection',
 }
 _LOCAL_OCR_MODELS = {
-    'OCR/paddleocr_torch': 'Text recognition (PaddleOCR)',
+    'OCR/paddleocr_torch/Multilingual_PP-OCRv3_det_infer.pth': 'Text detection (PaddleOCR)',
+    'OCR/paddleocr_torch/en_PP-OCRv5_rec_infer.pth': 'Text recognition (PaddleOCR)',
 }
 
 
