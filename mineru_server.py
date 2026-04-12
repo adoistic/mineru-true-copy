@@ -395,6 +395,40 @@ _parse_semaphore = threading.Semaphore(_max_ocr_concurrent)
 _server_status = "warming"
 
 # ---------------------------------------------------------------------------
+# Error code system (white-labeled with developer breadcrumbs)
+# ---------------------------------------------------------------------------
+# Prefixes: CP=Cloud Processing, LP=Local Processing, CT=Cloud Tables, CR=Credits
+# Suffixes: HTTP status or error category
+# User sees clean copy + error code. Developer decodes from prefix.
+
+ERROR_MESSAGES = {
+    'CP-401': 'Cloud processing is temporarily unavailable. Check your connection or switch to Local Processing.',
+    'CP-429': 'Cloud processing is busy. Your document will be processed shortly, or switch to Local Processing for instant results.',
+    'CP-503': 'Cloud processing is experiencing issues. Switch to Local Processing to continue working offline.',
+    'CP-500': 'Something went wrong with cloud processing. Try again or switch to Local Processing.',
+    'LP-MDL': 'Local processing needs to be set up. Please reinstall the application or contact support.',
+    'LP-OOM': 'This document is too large for local processing. Try Cloud Processing for large or complex documents.',
+    'CT-503': 'Cloud table extraction is unavailable. Tables will be processed locally with reduced accuracy.',
+    'CR-INS': 'Not enough credits for this operation.',
+    'CR-ERR': 'Unable to verify your credit balance. Please check your connection and try again.',
+}
+
+
+def _make_error(code: str, diagnostic: str = '', **extra) -> dict:
+    """Build a structured error response with white-labeled message + developer diagnostic.
+
+    The 'message' is safe to show to end users (no engine names).
+    The 'diagnostic' carries internal details for developer debugging (DOM data attribute).
+    """
+    return {
+        'error': ERROR_MESSAGES.get(code, 'An unexpected error occurred.'),
+        'code': code,
+        'diagnostic': diagnostic,
+        **extra,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Health check helpers for dual-mode OCR
 # ---------------------------------------------------------------------------
 
@@ -993,14 +1027,44 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         tb_str = traceback.format_exc()
         logger.error('Task %s exception:\n%s', task_id, tb_str,
                      extra={'task_id': task_id, 'error': str(e)})
+
+        # Classify error into white-labeled error code
+        err_str = str(e).lower()
+        tb_lower = tb_str.lower()
+        _config = config or {}
+        _ocr_mode = _config.get('ocr_mode', 'local')
+
+        if isinstance(e, FileNotFoundError) and _ocr_mode == 'local':
+            error_info = _make_error('LP-MDL', f'FileNotFoundError: {e}')
+        elif isinstance(e, MemoryError) or 'out of memory' in err_str:
+            if _ocr_mode == 'local':
+                error_info = _make_error('LP-OOM', f'MemoryError: {e}')
+            else:
+                error_info = _make_error('CP-500', f'MemoryError: {e}')
+        elif '401' in err_str or 'unauthorized' in err_str or 'invalid_key' in err_str:
+            error_info = _make_error('CP-401', f'auth_error: {e}')
+        elif '429' in err_str or 'rate_limit' in err_str:
+            error_info = _make_error('CP-429', f'rate_limit: {e}')
+        elif '503' in err_str or 'service_unavailable' in err_str:
+            if 'table' in tb_lower:
+                error_info = _make_error('CT-503', f'table_service_down: {e}')
+            else:
+                error_info = _make_error('CP-503', f'service_down: {e}')
+        else:
+            # Generic error with traceback location for debugging
+            tb_lines = tb_str.strip().split('\n')
+            location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
+            code = 'LP-500' if _ocr_mode == 'local' else 'CP-500'
+            error_info = _make_error(code, f'{e} | at: {location}')
+
         with _tasks_lock:
             tasks[task_id]['status'] = 'failed'
             tasks[task_id]['_completed_at'] = time.time()
-            # Include traceback location in the error for client-side debugging
-            tb_lines = tb_str.strip().split('\n')
-            location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
-            tasks[task_id]['error'] = f'{e} | at: {location}'
-        logger.error('Task %s failed: %s', task_id, e, extra={'task_id': task_id})
+            tasks[task_id]['error'] = error_info['error']
+            tasks[task_id]['error_code'] = error_info['code']
+            tasks[task_id]['error_diagnostic'] = error_info['diagnostic']
+        logger.error('Task %s failed [%s]: %s', task_id, error_info['code'], e,
+                     extra={'task_id': task_id})
     finally:
         # Clear threading.local so stale mode doesn't leak to next request on this thread
         set_processing_mode(ocr_mode='local', table_mode='local')
