@@ -4,6 +4,7 @@ export type JobType = 'ocr' | 'extract' | 'heading_correction' | 'wizard' | 'tra
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'retrying' | 'permanently_failed';
 export type PipelineErrorType = 'mineru_crash' | 'llm_api_error' | 'rate_limited' | 'insufficient_credits' | 'key_expired' | 'partial_failure' | 'network_error';
 export type KeyStatus = 'active' | 'revoked' | 'expired';
+export type ProcessingMode = 'local' | 'cloud';
 export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'true_copy_html' | 'true_copy_docx' | 'true_copy_pptx' | 'true_copy_pdf' | 'reflowed_docx' | 'reflowed_pdf' | 'zip';
 
 export interface Job {
@@ -149,6 +150,8 @@ export interface ProcessingOptions {
   include_figures?: boolean;               // default true
   figure_display?: 'image' | 'text';       // default 'image'
   include_benchmark_images?: boolean;      // true-copy HTML: also produce version with page images
+  processing_mode?: ProcessingMode;        // 'local' (default) or 'cloud'
+  table_mode?: ProcessingMode;             // 'cloud' (default) or 'local'
 }
 
 export interface ExtractionOptions {

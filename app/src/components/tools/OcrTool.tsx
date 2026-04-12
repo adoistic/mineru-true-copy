@@ -3,7 +3,7 @@
 import { useState, useCallback } from "react";
 import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
-import type { ExportFormat } from "@/types";
+import type { ExportFormat, ProcessingMode } from "@/types";
 
 interface FormatGroup {
   label: string;
@@ -62,6 +62,17 @@ export default function OcrTool() {
   const [formulaDisplay, setFormulaDisplay] = useState<'rendered' | 'image'>('image');
   const [tableDisplay, setTableDisplay] = useState<'rendered' | 'image'>('rendered');
   const [figureDisplay, setFigureDisplay] = useState<'image' | 'text'>('image');
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>(() =>
+    (typeof window !== "undefined"
+      ? (localStorage.getItem("processing_mode") as ProcessingMode)
+      : null) ?? "local"
+  );
+  const [tableMode, setTableMode] = useState<ProcessingMode>(() =>
+    (typeof window !== "undefined"
+      ? (localStorage.getItem("table_mode") as ProcessingMode)
+      : null) ?? "cloud"
+  );
+  const [cloudAvailable, setCloudAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -108,6 +119,8 @@ export default function OcrTool() {
             include_figures: includeFigures,
             figure_display: figureDisplay,
             include_benchmark_images: includeBenchmarkHtml,
+            processing_mode: processingMode,
+            table_mode: processingMode === 'cloud' ? 'cloud' : tableMode,
           })
         );
 
@@ -142,7 +155,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay]);
+  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -391,6 +404,149 @@ export default function OcrTool() {
             />
             Bundle all outputs into a ZIP file
           </label>
+        </div>
+
+        {/* Processing Mode */}
+        <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-600 dark:bg-slate-700/30">
+          <h4 className="mb-3 text-sm font-medium text-slate-900 dark:text-white">
+            Processing Mode
+          </h4>
+
+          {/* Local Processing */}
+          <label className="mb-3 flex cursor-pointer items-start gap-3">
+            <input
+              type="radio"
+              name="processing_mode"
+              value="local"
+              checked={processingMode === "local"}
+              onChange={() => {
+                setProcessingMode("local");
+                localStorage.setItem("processing_mode", "local");
+              }}
+              className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+            />
+            <div className="flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium text-slate-900 dark:text-white">
+                  Local Processing
+                </span>
+                {processingMode === "local" && (
+                  <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
+                    default
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Your document is processed entirely on this device.
+                No data leaves your computer. Faster for most documents.
+              </p>
+              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Best for: clean prints, typed documents, standard layouts. 0.25 credits per page.
+              </p>
+            </div>
+          </label>
+
+          {/* Cloud Processing */}
+          <label className={`flex cursor-pointer items-start gap-3 ${!cloudAvailable ? "opacity-50" : ""}`}>
+            <input
+              type="radio"
+              name="processing_mode"
+              value="cloud"
+              checked={processingMode === "cloud"}
+              disabled={!cloudAvailable}
+              onChange={() => {
+                setProcessingMode("cloud");
+                localStorage.setItem("processing_mode", "cloud");
+              }}
+              className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+            />
+            <div className="flex-1">
+              <span className="text-sm font-medium text-slate-900 dark:text-white">
+                Cloud Processing
+              </span>
+              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                Your document is sent to a secure cloud service for processing,
+                then results are returned to your device. More accurate on degraded
+                scans, handwriting, and complex layouts. Requires internet connection.
+              </p>
+              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                Best for: old/faded scans, handwritten notes, unusual fonts. 1 credit per page.
+              </p>
+            </div>
+          </label>
+
+          {!cloudAvailable && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              Cloud processing is unavailable. Check your internet connection.
+            </p>
+          )}
+
+          {/* Table Extraction sub-section (only when Local Processing selected) */}
+          {processingMode === "local" && (
+            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-600 dark:bg-slate-800">
+              <h5 className="mb-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+                Table Extraction
+              </h5>
+
+              <label className={`mb-2 flex cursor-pointer items-start gap-3 ${!cloudAvailable ? "opacity-50" : ""}`}>
+                <input
+                  type="radio"
+                  name="table_mode"
+                  value="cloud"
+                  checked={tableMode === "cloud"}
+                  disabled={!cloudAvailable}
+                  onChange={() => {
+                    setTableMode("cloud");
+                    localStorage.setItem("table_mode", "cloud");
+                  }}
+                  className="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-medium text-slate-900 dark:text-white">
+                      Cloud Tables
+                    </span>
+                    <span className="text-xs text-slate-400 dark:text-slate-500">recommended</span>
+                  </div>
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    Tables are sent to the cloud for higher accuracy. Complex tables
+                    with merged cells, nested headers, and irregular layouts are handled better.
+                    +0.5 credits per page that contains a table.
+                  </p>
+                </div>
+              </label>
+
+              <label className="flex cursor-pointer items-start gap-3">
+                <input
+                  type="radio"
+                  name="table_mode"
+                  value="local"
+                  checked={tableMode === "local"}
+                  onChange={() => {
+                    setTableMode("local");
+                    localStorage.setItem("table_mode", "local");
+                  }}
+                  className="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+                />
+                <div className="flex-1">
+                  <span className="text-xs font-medium text-slate-900 dark:text-white">
+                    Local Tables
+                  </span>
+                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
+                    Tables are processed locally. No additional credits. Works well for
+                    simple, regular tables. May struggle with complex merges or unusual
+                    structures. Choose this for fully offline processing.
+                  </p>
+                </div>
+              </label>
+
+              {!cloudAvailable && tableMode === "cloud" && (
+                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+                  Cloud tables unavailable. Switching to local tables.
+                </p>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Toggles */}

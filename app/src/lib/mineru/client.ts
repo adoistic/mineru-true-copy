@@ -76,6 +76,8 @@ export interface SubmitOptions {
   tableDisplay?: 'rendered' | 'image';
   includeFigures?: boolean;
   figureDisplay?: 'image' | 'text';
+  processingMode?: 'local' | 'cloud';
+  tableMode?: 'local' | 'cloud';
 }
 
 export async function submitFile(filePath: string, options?: SubmitOptions): Promise<string> {
@@ -98,6 +100,8 @@ export async function submitFile(filePath: string, options?: SubmitOptions): Pro
   if (options?.tableDisplay) formData.append('table_display', options.tableDisplay);
   if (options?.includeFigures !== undefined) formData.append('include_figures', String(options.includeFigures));
   if (options?.figureDisplay) formData.append('figure_display', options.figureDisplay);
+  if (options?.processingMode) formData.append('processing_mode', options.processingMode);
+  if (options?.tableMode) formData.append('table_mode', options.tableMode);
 
   const response = await fetch(`${getMineruUrl()}/file_parse`, {
     method: 'POST',
