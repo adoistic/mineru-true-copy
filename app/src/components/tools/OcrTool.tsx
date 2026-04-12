@@ -65,7 +65,7 @@ export default function OcrTool() {
   const [processingMode, setProcessingMode] = useState<ProcessingMode>(() =>
     (typeof window !== "undefined"
       ? (localStorage.getItem("processing_mode") as ProcessingMode)
-      : null) ?? "local"
+      : null) ?? "cloud"
   );
   const [tableMode, setTableMode] = useState<ProcessingMode>(() =>
     (typeof window !== "undefined"

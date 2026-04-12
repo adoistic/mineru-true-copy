@@ -687,7 +687,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # Set per-request processing mode via threading.local()
         # SECURITY: defaults to local OCR (never send data externally by accident)
         _config = config or {}
-        ocr_mode = _config.get('ocr_mode', 'local')
+        ocr_mode = _config.get('ocr_mode', 'cloud')
         table_mode = _config.get('table_mode', 'cloud')
         set_processing_mode(ocr_mode=ocr_mode, table_mode=table_mode)
         logger.info('Processing mode: ocr=%s, table=%s',
@@ -2719,7 +2719,7 @@ class MineruHandler(BaseHTTPRequestHandler):
         # so HTTP submissions never fail with 429 — they queue as 'pending' tasks.
 
         # Validate processing mode
-        ocr_mode = fields.get('processing_mode', 'local')
+        ocr_mode = fields.get('processing_mode', 'cloud')
         table_mode = fields.get('table_mode', 'cloud')
         if ocr_mode not in ('local', 'cloud'):
             self._send_json(400, {'error': f'Invalid processing_mode: {ocr_mode}. Must be "local" or "cloud".'})

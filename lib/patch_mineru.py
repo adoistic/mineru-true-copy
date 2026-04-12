@@ -32,7 +32,7 @@ logger = logging.getLogger('patch_mineru')
 _request_context = threading.local()
 
 
-def set_processing_mode(ocr_mode='local', table_mode='cloud'):
+def set_processing_mode(ocr_mode='cloud', table_mode='cloud'):
     """Set OCR and table engine mode for the current thread.
 
     Called from process_pdf() before ds.apply(). Thread-safe via threading.local().
@@ -53,7 +53,7 @@ def get_processing_mode():
     have data sent externally without explicit opt-in.
     """
     return (
-        getattr(_request_context, 'ocr_mode', 'local'),
+        getattr(_request_context, 'ocr_mode', 'cloud'),
         getattr(_request_context, 'table_mode', 'cloud'),
     )
 

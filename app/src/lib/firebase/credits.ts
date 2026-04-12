@@ -176,7 +176,7 @@ export interface CreditOptions {
 }
 
 export function calculateCredits(jobType: JobType, pageCount: number, options?: CreditOptions): number {
-  const mode = options?.processingMode ?? 'local';
+  const mode = options?.processingMode ?? 'cloud';
   const tableMode = options?.tableMode ?? 'cloud';
   const languageCount = options?.languageCount ?? 1;
 
