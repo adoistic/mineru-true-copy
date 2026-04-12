@@ -552,6 +552,77 @@ def _check_local_models_exist() -> bool:
     return _local_models_result
 
 
+def _detect_script(pdf_bytes: bytes) -> str:
+    """Auto-detect the primary script in a PDF by analyzing embedded text.
+
+    Extracts text from the first 3 pages using PyMuPDF, counts Unicode
+    script blocks, and returns the PaddleOCR language code for the
+    dominant non-Latin script. Falls back to 'en' if no text or Latin-only.
+    """
+    import unicodedata
+    import fitz
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype='pdf')
+        sample_text = ''
+        for page_idx in range(min(3, len(doc))):
+            sample_text += doc[page_idx].get_text()
+        doc.close()
+    except Exception:
+        return 'en'
+
+    if not sample_text or len(sample_text.strip()) < 20:
+        return 'en'  # Scanned PDF with no embedded text, default to English
+
+    # Count characters by Unicode script block
+    script_counts: dict[str, int] = {}
+    for ch in sample_text:
+        if ch.isspace() or ch in '0123456789.,;:!?()[]{}+-=/*@#$%&"\'':
+            continue
+        try:
+            name = unicodedata.name(ch, '')
+        except ValueError:
+            continue
+        if 'LATIN' in name:
+            script_counts['latin'] = script_counts.get('latin', 0) + 1
+        elif 'DEVANAGARI' in name:
+            script_counts['devanagari'] = script_counts.get('devanagari', 0) + 1
+        elif 'ARABIC' in name:
+            script_counts['arabic'] = script_counts.get('arabic', 0) + 1
+        elif 'CJK' in name or 'KANGXI' in name:
+            script_counts['ch'] = script_counts.get('ch', 0) + 1
+        elif 'HANGUL' in name:
+            script_counts['korean'] = script_counts.get('korean', 0) + 1
+        elif 'HIRAGANA' in name or 'KATAKANA' in name:
+            script_counts['japan'] = script_counts.get('japan', 0) + 1
+        elif 'CYRILLIC' in name:
+            script_counts['cyrillic'] = script_counts.get('cyrillic', 0) + 1
+        elif 'THAI' in name:
+            script_counts['thai'] = script_counts.get('thai', 0) + 1
+        elif 'TAMIL' in name:
+            script_counts['ta'] = script_counts.get('ta', 0) + 1
+        elif 'TELUGU' in name:
+            script_counts['te'] = script_counts.get('te', 0) + 1
+        elif 'GREEK' in name:
+            script_counts['greek'] = script_counts.get('greek', 0) + 1
+        elif 'GEORGIAN' in name:
+            script_counts['ka'] = script_counts.get('ka', 0) + 1
+
+    if not script_counts:
+        return 'en'
+
+    # Pick the dominant non-Latin script (most docs have some Latin mixed in)
+    non_latin = {k: v for k, v in script_counts.items() if k != 'latin'}
+    if non_latin:
+        dominant = max(non_latin, key=non_latin.get)
+        # Only use non-Latin if it has significant presence (>10% of chars)
+        total = sum(script_counts.values())
+        if non_latin[dominant] / total > 0.1:
+            return dominant
+
+    return 'en'
+
+
 def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     """Post-process MinerU results to crop equation spans from the PDF.
 
@@ -725,7 +796,21 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         t_start = time.time()
         config = config or {}
 
-        ocr_lang = _config.get('ocr_lang', 'en')
+        ocr_lang_raw = _config.get('ocr_lang', 'en')
+        # Handle auto-detect and multi-lang (comma-separated)
+        if ocr_lang_raw == 'auto':
+            ocr_lang = _detect_script(pdf_bytes)
+            logger.info('Auto-detected script: %s', ocr_lang,
+                        extra={'task_id': task_id})
+        elif ',' in ocr_lang_raw:
+            # Multi-lang: use the first non-English lang as primary
+            # (most PaddleOCR models include Latin chars in their charset)
+            langs = [l.strip() for l in ocr_lang_raw.split(',')]
+            ocr_lang = next((l for l in langs if l != 'en'), langs[0])
+            logger.info('Multi-lang %s, using primary: %s', langs, ocr_lang,
+                        extra={'task_id': task_id})
+        else:
+            ocr_lang = ocr_lang_raw
         ds = PymuDocDataset(pdf_bytes, lang=ocr_lang)
 
         # Step 1: Model inference (layout detection + OCR)

@@ -72,11 +72,13 @@ export default function OcrTool() {
       ? (localStorage.getItem("table_mode") as ProcessingMode)
       : null) ?? "cloud"
   );
-  const [ocrLang, setOcrLang] = useState(() =>
-    (typeof window !== "undefined"
-      ? localStorage.getItem("ocr_lang")
-      : null) ?? "en"
-  );
+  const [ocrLangs, setOcrLangs] = useState<string[]>(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("ocr_langs");
+      if (stored) try { return JSON.parse(stored); } catch {}
+    }
+    return ["auto"];
+  });
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
@@ -156,7 +158,7 @@ export default function OcrTool() {
             include_benchmark_images: includeBenchmarkHtml,
             processing_mode: processingMode,
             table_mode: processingMode === 'cloud' ? 'cloud' : tableMode,
-            ocr_lang: ocrLang,
+            ocr_lang: ocrLangs.join(','),
           })
         );
 
@@ -191,7 +193,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode, ocrLang]);
+  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode, ocrLangs]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -593,43 +595,85 @@ export default function OcrTool() {
 
         {/* Document Script / Language */}
         <div>
-          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+          <label className="mb-2 block text-sm text-slate-600 dark:text-slate-400">
             Document Script
           </label>
-          <select
-            value={ocrLang}
-            onChange={(e) => {
-              setOcrLang(e.target.value);
-              localStorage.setItem("ocr_lang", e.target.value);
-            }}
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-          >
-            <optgroup label="Common">
-              <option value="en">English</option>
-              <option value="ch">Chinese (Simplified)</option>
-              <option value="chinese_cht">Chinese (Traditional)</option>
-              <option value="devanagari">Hindi / Devanagari</option>
-              <option value="arabic">Arabic / Urdu / Persian</option>
-              <option value="latin">Latin Script (French, Spanish, German, etc.)</option>
-            </optgroup>
-            <optgroup label="Asian">
-              <option value="korean">Korean</option>
-              <option value="japan">Japanese</option>
-              <option value="thai">Thai</option>
-              <option value="ta">Tamil</option>
-              <option value="te">Telugu</option>
-            </optgroup>
-            <optgroup label="Other Scripts">
-              <option value="cyrillic">Cyrillic (Russian, Ukrainian, etc.)</option>
-              <option value="greek">Greek</option>
-              <option value="eslav">East Slavic</option>
-              <option value="ka">Georgian</option>
-            </optgroup>
-          </select>
+
+          {/* Auto-detect toggle */}
+          <label className="mb-2 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+            <input
+              type="checkbox"
+              checked={ocrLangs.includes("auto")}
+              onChange={(e) => {
+                const next = e.target.checked ? ["auto"] : ["en"];
+                setOcrLangs(next);
+                localStorage.setItem("ocr_langs", JSON.stringify(next));
+              }}
+              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+            />
+            Auto-detect
+            <span className="text-xs text-slate-400 dark:text-slate-500">(recommended)</span>
+          </label>
+
+          {/* Manual script selection (shown when auto-detect is off) */}
+          {!ocrLangs.includes("auto") && (
+            <div className="space-y-1">
+              <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">
+                Select all scripts present in your document. English is included automatically with most scripts.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { value: "en", label: "English" },
+                  { value: "ch", label: "Chinese (Simplified)" },
+                  { value: "chinese_cht", label: "Chinese (Traditional)" },
+                  { value: "devanagari", label: "Hindi / Devanagari" },
+                  { value: "arabic", label: "Arabic / Urdu" },
+                  { value: "latin", label: "Latin (French, Spanish...)" },
+                  { value: "korean", label: "Korean" },
+                  { value: "japan", label: "Japanese" },
+                  { value: "thai", label: "Thai" },
+                  { value: "ta", label: "Tamil" },
+                  { value: "te", label: "Telugu" },
+                  { value: "cyrillic", label: "Cyrillic (Russian...)" },
+                  { value: "greek", label: "Greek" },
+                  { value: "eslav", label: "East Slavic" },
+                  { value: "ka", label: "Georgian" },
+                ].map(({ value, label }) => {
+                  const selected = ocrLangs.includes(value);
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => {
+                        const next = selected
+                          ? ocrLangs.filter((l) => l !== value)
+                          : [...ocrLangs, value];
+                        const final = next.length === 0 ? ["en"] : next;
+                        setOcrLangs(final);
+                        localStorage.setItem("ocr_langs", JSON.stringify(final));
+                      }}
+                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                        selected
+                          ? "bg-blue-600 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-            {processingMode === 'cloud'
-              ? "Cloud processing auto-detects the script. This setting is used as a hint."
-              : "Local processing uses a script-specific model. Select the primary script in your document for best accuracy."}
+            {ocrLangs.includes("auto")
+              ? processingMode === "cloud"
+                ? "Cloud processing auto-detects all scripts in the document."
+                : "The first page will be sampled to detect the script automatically."
+              : processingMode === "cloud"
+                ? "Cloud processing handles any script. Your selection is used as a hint."
+                : `Local processing will use models for: ${ocrLangs.join(", ")}.`}
           </p>
         </div>
 
