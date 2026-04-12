@@ -612,8 +612,16 @@ export default function OcrTool() {
               className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
             />
             Auto-detect
-            <span className="text-xs text-slate-400 dark:text-slate-500">(recommended)</span>
+            {processingMode === "cloud" && (
+              <span className="text-xs text-slate-400 dark:text-slate-500">(recommended)</span>
+            )}
           </label>
+          {ocrLangs.includes("auto") && processingMode === "local" && (
+            <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+              Local auto-detect works best for Chinese, English, Japanese, Korean, Arabic, and Russian.
+              For Hindi, Tamil, Telugu, Thai, or other scripts, turn off auto-detect and select manually for best results.
+            </p>
+          )}
 
           {/* Manual script selection (shown when auto-detect is off) */}
           {!ocrLangs.includes("auto") && (
@@ -670,7 +678,7 @@ export default function OcrTool() {
             {ocrLangs.includes("auto")
               ? processingMode === "cloud"
                 ? "Cloud processing auto-detects all scripts in the document."
-                : "The first page will be sampled to detect the script automatically."
+                : "Auto-detect supports: Chinese, English, Japanese, Korean, Arabic, Russian."
               : processingMode === "cloud"
                 ? "Cloud processing handles any script. Your selection is used as a hint."
                 : `Local processing will use models for: ${ocrLangs.join(", ")}.`}
