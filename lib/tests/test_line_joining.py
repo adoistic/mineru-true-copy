@@ -10,6 +10,9 @@ from mineru_server import (
     _is_list_item, _detect_list_content, _is_decorative_sidebar,
     _is_decorative_block, _merge_overlapping_blocks,
     _detect_margin_line_numbers, _strip_document_line_numbers,
+    _typical_line_height, _content_x_union,
+    _is_false_positive_equation, _latex_to_plain_text,
+    _normalize_equation_latex, _is_scientific_measurement,
 )
 from magic_pdf.config.ocr_content_type import ContentType
 
@@ -464,10 +467,11 @@ class TestDecorativeBlock:
         assert not _is_decorative_block(block, 'This is normal text content.', 612)
 
     def test_small_block_short_text(self):
-        """Small block with short text: likely icon/logo."""
+        """Small block with short text in margin: likely icon/logo."""
         block = {'bbox': [500, 50, 570, 100], 'type': 'text'}
         # width=70 (11% of 612), height=50, text="©"
-        assert _is_decorative_block(block, '©', 612)
+        # In margin (content is at x=60-490), so decorative rules fire
+        assert _is_decorative_block(block, '©', 612, 12.0, (60, 490))
 
     def test_small_block_with_real_text(self):
         """Small block but with enough text to be real content."""
@@ -477,7 +481,8 @@ class TestDecorativeBlock:
     def test_watermark_short_text(self):
         """Very short text (1-3 chars) in small area = stamp/watermark."""
         block = {'bbox': [100, 100, 140, 130], 'type': 'text'}
-        assert _is_decorative_block(block, 'OK', 612)
+        # In margin (content is at x=200-540), no overlap
+        assert _is_decorative_block(block, 'OK', 612, 12.0, (200, 540))
 
     def test_empty_text_not_decorative(self):
         """Empty text blocks are handled elsewhere, not here."""
@@ -493,9 +498,9 @@ class TestDecorativeBlock:
         """Decorative watermark where MinerU OCR'd a few words.
         Previously missed by len(text) <= 5 heuristic.
         """
-        # Small block, short watermark text
+        # Small block, short watermark text, in margin (content at x=60-490)
         block = {'bbox': [520, 700, 590, 730], 'type': 'text'}
-        assert _is_decorative_block(block, 'DRAFT', 612)
+        assert _is_decorative_block(block, 'DRAFT', 612, 12.0, (60, 490))
 
     def test_uses_bbox_not_bbox_fs(self):
         """Uses layout bbox, not text-fitted bbox_fs."""
@@ -923,3 +928,584 @@ class TestStripDocumentLineNumbers:
         ])
         _strip_document_line_numbers(pages)
         assert pages[0]['preproc_blocks'][1]['text_per_page'] == 'Abstract of the paper here continuing'
+
+
+# ---------------------------------------------------------------------------
+# Position-aware decorative detection
+# ---------------------------------------------------------------------------
+
+def _make_para_block(block_type='text', bbox=None, lines_with_bboxes=None):
+    """Build a para_block with line-level bboxes for position-aware tests."""
+    bbox = bbox or [0, 0, 100, 20]
+    block = {'type': block_type, 'bbox': bbox}
+    if lines_with_bboxes:
+        lines = []
+        for lb in lines_with_bboxes:
+            lines.append({'bbox': lb, 'spans': [{'content': 'x', 'type': 'text', 'bbox': lb}]})
+        block['lines'] = lines
+    return block
+
+
+class TestTypicalLineHeight:
+    """Tests for _typical_line_height helper."""
+
+    def test_computes_median_from_lines(self):
+        blocks = [
+            _make_para_block(bbox=[60, 0, 540, 36],
+                             lines_with_bboxes=[[60, 0, 540, 12], [60, 12, 540, 24], [60, 24, 540, 36]]),
+            _make_para_block(bbox=[60, 50, 540, 62],
+                             lines_with_bboxes=[[60, 50, 540, 62]]),
+            _make_para_block(bbox=[60, 70, 540, 82],
+                             lines_with_bboxes=[[60, 70, 540, 82]]),
+        ]
+        lh = _typical_line_height(blocks)
+        assert lh == 12.0  # all lines are 12pt
+
+    def test_returns_none_for_sparse_page(self):
+        blocks = [
+            _make_para_block(bbox=[60, 0, 540, 12],
+                             lines_with_bboxes=[[60, 0, 540, 12]]),
+        ]
+        assert _typical_line_height(blocks) is None  # only 1 text block
+
+    def test_skips_non_text_blocks(self):
+        blocks = [
+            _make_para_block('image', bbox=[0, 0, 500, 400]),
+            _make_para_block('text', bbox=[60, 0, 540, 12],
+                             lines_with_bboxes=[[60, 0, 540, 12]]),
+        ]
+        assert _typical_line_height(blocks) is None  # only 1 text block
+
+
+class TestContentXUnion:
+    """Tests for _content_x_union helper."""
+
+    def test_union_of_text_blocks(self):
+        blocks = [
+            _make_para_block(bbox=[60, 0, 290, 100]),
+            _make_para_block(bbox=[310, 0, 540, 100]),
+        ]
+        xu = _content_x_union(blocks)
+        assert xu == (60, 540)
+
+    def test_returns_none_for_no_text(self):
+        blocks = [_make_para_block('image', bbox=[0, 0, 500, 400])]
+        assert _content_x_union(blocks) is None
+
+
+class TestDecorativePositionAware:
+    """Tests for position-aware decorative detection."""
+
+    def _page_blocks(self):
+        """Simulate a two-column page with text at x=60-290 and x=310-540."""
+        return [
+            _make_para_block(bbox=[60, 100, 290, 300],
+                             lines_with_bboxes=[[60, 100, 290, 112], [60, 112, 290, 124]]),
+            _make_para_block(bbox=[60, 320, 290, 450],
+                             lines_with_bboxes=[[60, 320, 290, 332], [60, 332, 290, 344]]),
+            _make_para_block(bbox=[310, 100, 540, 300],
+                             lines_with_bboxes=[[310, 100, 540, 112], [310, 112, 540, 124]]),
+        ]
+
+    def test_inline_fragment_not_decorative(self):
+        """'10-50 Km' at x=310-360, same height as text → NOT decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        # Small block, 7 chars, but overlaps with content and normal height
+        fragment = {'bbox': [310, 650, 360, 662], 'type': 'text'}
+        assert not _is_decorative_block(fragment, '10-50 Km', 612, lh, xu)
+
+    def test_sidebar_in_margin_decorative(self):
+        """arXiv sidebar at x=15-37, no overlap with content → decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        sidebar = {'bbox': [15, 200, 37, 585], 'type': 'text'}
+        # Rule 1: narrow vertical strip (aspect_ratio > 6, width < 60)
+        assert _is_decorative_block(sidebar, 'arXiv:2604.00252v1', 612, lh, xu)
+
+    def test_small_margin_block_decorative(self):
+        """Small block with short text in the margin → decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        # x=10-50, outside content union x=60-540 → no significant overlap
+        margin_block = {'bbox': [10, 300, 50, 340], 'type': 'text'}
+        assert _is_decorative_block(margin_block, 'QR', 612, lh, xu)
+
+    def test_normal_height_margin_block_decorative(self):
+        """Normal-height block in margin (no x-overlap) → still decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        margin_block = {'bbox': [10, 300, 50, 312], 'type': 'text'}
+        assert _is_decorative_block(margin_block, 'v1', 612, lh, xu)
+
+    def test_centered_title_not_decorative(self):
+        """Centered title spanning both columns → significant overlap with union."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        # x=100-500 overlaps with union x=60-540: overlap=400, width=400, 100% > 50%
+        title = {'bbox': [100, 50, 500, 62], 'type': 'text'}
+        assert not _is_decorative_block(title, 'Chapter 1', 612, lh, xu)
+
+    def test_narrow_strip_still_decorative(self):
+        """Rule 1 (narrow strip) fires regardless of position data."""
+        # Even with line_height=None
+        strip = {'bbox': [15, 100, 25, 600], 'type': 'text'}
+        assert _is_decorative_block(strip, 'sidebar text', 612, None, None)
+
+    def test_sparse_page_rules_suppressed(self):
+        """On sparse pages (line_height=None), rules 2/3 suppressed."""
+        # Small block, short text — would normally be decorative
+        block = {'bbox': [10, 300, 50, 340], 'type': 'text'}
+        # Without position data → suppressed, returns False
+        assert not _is_decorative_block(block, 'QR code', 612, None, None)
+
+    def test_margin_annotation_barely_overlapping(self):
+        """Margin annotation with < 50% overlap → decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)  # (60, 540)
+        # Block at x=40-70: overlap with union = 70-60=10, width=30, 33% < 50%
+        annotation = {'bbox': [40, 300, 70, 312], 'type': 'text'}
+        # Normal height, but insufficient overlap → rules 2/3 can fire
+        assert _is_decorative_block(annotation, 'ref', 612, lh, xu)
+
+    def test_tall_block_with_overlap_and_tiny_text_decorative(self):
+        """Tall block overlapping content with very short text (≤3 chars) → decorative."""
+        blocks = self._page_blocks()
+        lh = _typical_line_height(blocks)
+        xu = _content_x_union(blocks)
+        # Tall (200px >> 2*12=24), within content x-range, text ≤3 chars
+        # Rule 3: text_len<=3, width=60 < 612*0.25=153, area=12000 < 612*50=30600
+        tall_block = {'bbox': [60, 100, 120, 300], 'type': 'text'}
+        assert _is_decorative_block(tall_block, 'OK', 612, lh, xu)
+
+
+class TestFalsePositiveEquation:
+    """Tests for detecting inline equations that are actually text/measurements."""
+
+    def test_measurement_km(self):
+        """'150 Km' misclassified as equation."""
+        assert _is_false_positive_equation(r'1 5 0 \mathrm { K m }')
+
+    def test_measurement_range_km(self):
+        """'10-50 Km' — the user's original pain point."""
+        assert _is_false_positive_equation(r'1 0 { - } 5 0 ~ \mathrm { K m }')
+
+    def test_measurement_mm(self):
+        assert _is_false_positive_equation(r'1 5 0 \mathrm { m m }')
+
+    def test_measurement_km_lower(self):
+        assert _is_false_positive_equation(r'3 2 0 ~ \mathrm { k m }')
+
+    def test_simple_number(self):
+        assert _is_false_positive_equation(r'1 6 \mathrm { k m }')
+
+    def test_nested_mathrm(self):
+        assert _is_false_positive_equation(r'5 0 ~ \mathrm { { K m } }')
+
+    def test_real_equation_greek(self):
+        """Real math with Greek letters."""
+        assert not _is_false_positive_equation(r'\alpha + \beta')
+
+    def test_real_equation_mathbb(self):
+        assert not _is_false_positive_equation(r'\mathbb { T } ^ { d }')
+
+    def test_real_equation_geq(self):
+        assert not _is_false_positive_equation(r'd \geq 2')
+
+    def test_real_equation_frac(self):
+        assert not _is_false_positive_equation(r'\frac { a } { b }')
+
+    def test_real_equation_subscript_var(self):
+        assert not _is_false_positive_equation(r'U _ { V } ( t , s )')
+
+    def test_real_equation_ell_alpha(self):
+        assert not _is_false_positive_equation(
+            r'( \lambda _ { m } ) \in \ell ^ { \alpha } ( \mathbb { N } )')
+
+    def test_real_equation_infty(self):
+        assert not _is_false_positive_equation(r'\mathrm { V o l } ( X ) < \infty')
+
+    def test_real_equation_lesssim(self):
+        assert not _is_false_positive_equation(r'A \lesssim B')
+
+    def test_empty_latex(self):
+        assert _is_false_positive_equation('')
+
+    def test_just_digits(self):
+        assert _is_false_positive_equation('1 2 3')
+
+    def test_percentage(self):
+        assert _is_false_positive_equation(r'9 5 \%')
+
+    def test_real_equation_sqrt(self):
+        assert not _is_false_positive_equation(r'\sqrt { x ^ 2 + y ^ 2 }')
+
+    def test_real_equation_integral(self):
+        assert not _is_false_positive_equation(r'\int _ 0 ^ 1 f ( x ) d x')
+
+
+class TestLatexToPlainText:
+    """Tests for converting false-positive LaTeX back to readable text."""
+
+    def test_measurement_km(self):
+        assert _latex_to_plain_text(r'1 5 0 \mathrm { K m }') == '150 Km'
+
+    def test_measurement_range(self):
+        assert _latex_to_plain_text(r'1 0 { - } 5 0 ~ \mathrm { K m }') == '10-50 Km'
+
+    def test_measurement_with_tilde(self):
+        assert _latex_to_plain_text(r'3 2 0 ~ \mathrm { k m }') == '320 km'
+
+    def test_simple_number(self):
+        assert _latex_to_plain_text(r'1 6 \mathrm { k m }') == '16 km'
+
+    def test_nested_braces(self):
+        result = _latex_to_plain_text(r'5 0 ~ \mathrm { { K m } }')
+        # After unwrapping and collapsing: should contain "50" and "Km"
+        assert '50' in result, f'Expected "50" in "{result}"'
+        assert 'Km' in result or 'km' in result.lower(), f'Expected "Km" in "{result}"'
+
+    def test_just_digits(self):
+        assert _latex_to_plain_text('1 2 3') == '123'
+
+
+class TestFalsePositiveEquationIntegration:
+    """Integration test: equation spans that are false positives should become plain text."""
+
+    def test_measurement_becomes_text(self):
+        """A block with '10-50 Km' classified as InlineEquation should produce text, not EQ placeholder."""
+        block = _make_block([
+            [('of ', ContentType.Text),
+             (r'1 0 { - } 5 0 ~ \mathrm { K m }', ContentType.InlineEquation),
+             (' and have an altitude', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        # The equation should have been converted to plain text
+        assert '{{EQ:' not in text, f'Expected plain text but got equation placeholder: {text}'
+        assert '10-50' in text, f'Expected "10-50" in text: {text}'
+        assert 'Km' in text, f'Expected "Km" in text: {text}'
+        assert len(inline_eqs) == 0, f'Expected no inline equations but got {len(inline_eqs)}'
+
+    def test_real_equation_preserved(self):
+        """A real equation should NOT be converted to text."""
+        block = _make_block([
+            [('where ', ContentType.Text),
+             (r'd \geq 2', ContentType.InlineEquation),
+             (' holds.', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        assert '{{EQ:' in text, f'Expected equation placeholder: {text}'
+        assert len(inline_eqs) == 1
+
+
+class TestNormalizeEquationLatex:
+    """Tests for MinerU LaTeX normalization."""
+
+    def test_calcium_ion(self):
+        norm = _normalize_equation_latex(r'{ \mathsf { C a } } ^ { 2 + }')
+        assert 'Ca' in norm and '2+' in norm, f'Got: {norm}'
+
+    def test_temperature(self):
+        norm = _normalize_equation_latex(r'3 7 ^ { \circ } \mathsf { C }')
+        assert '37' in norm and '\\circ' in norm and 'C' in norm, f'Got: {norm}'
+
+    def test_concentration_mu(self):
+        norm = _normalize_equation_latex(r'2 5 0 ~ \mu \mathrm { M }')
+        assert '250' in norm and '\\mu' in norm and 'M' in norm, f'Got: {norm}'
+
+    def test_p_value(self):
+        norm = _normalize_equation_latex(r'^ { \star } P < 0 . 0 5')
+        assert 'P' in norm and '0.05' in norm, f'Got: {norm}'
+
+    def test_deletion_variant(self):
+        norm = _normalize_equation_latex(r'{ \mathsf { D } } \Delta 1 2 1')
+        assert 'D' in norm and '\\Delta' in norm and '121' in norm, f'Got: {norm}'
+
+    def test_plus_minus(self):
+        norm = _normalize_equation_latex(r'\pm \mathsf { S D }')
+        assert '\\pm' in norm and 'SD' in norm, f'Got: {norm}'
+
+
+class TestScientificMeasurement:
+    """Tests for detecting scientific measurements that use math-like LaTeX."""
+
+    # --- Chemical ions ---
+    def test_calcium_ion(self):
+        assert _is_scientific_measurement(r'{ \mathsf { C a } } ^ { 2 + }')
+
+    def test_calcium_alt(self):
+        assert _is_scientific_measurement(r'\tt C a ^ { 2 + }')
+
+    def test_calcium_mathsf(self):
+        assert _is_scientific_measurement(r'\mathsf { C a } ^ { 2 + }')
+
+    # --- Temperature ---
+    def test_temperature_37(self):
+        assert _is_scientific_measurement(r'3 7 ^ { \circ } \mathsf { C }')
+
+    def test_temperature_95(self):
+        assert _is_scientific_measurement(r'9 5 ^ { \circ } \mathsf { C }')
+
+    def test_temperature_4(self):
+        assert _is_scientific_measurement(r'4 ~ ^ { \circ } \mathsf C')
+
+    # --- Concentrations with µ ---
+    def test_concentration_250uM(self):
+        assert _is_scientific_measurement(r'2 5 0 ~ \mu \mathrm { M }')
+
+    def test_concentration_1uM(self):
+        assert _is_scientific_measurement(r'1 \mu \mathsf { M }')
+
+    def test_concentration_100uM(self):
+        assert _is_scientific_measurement(r'1 0 0 ~ { \mu \mathsf { M } }')
+
+    def test_concentration_ug_mL(self):
+        assert _is_scientific_measurement(r'8 ~ { \mu \ g } / { \ m } L')
+
+    def test_concentration_uL(self):
+        assert _is_scientific_measurement(r'2 \mu \ L')
+
+    # --- Concentrations without µ ---
+    def test_concentration_20mM(self):
+        assert _is_scientific_measurement(r'2 0 ~ { \mathsf { m M } }')
+
+    def test_concentration_150mM(self):
+        assert _is_scientific_measurement(r'1 5 0 ~ \mathsf { m M }')
+
+    def test_concentration_3mM(self):
+        assert _is_scientific_measurement(r'3 \mathsf { m M }')
+
+    # --- P-values ---
+    def test_pvalue_star(self):
+        assert _is_scientific_measurement(r'^ { \star } P < 0 . 0 5')
+
+    def test_pvalue_double_star(self):
+        assert _is_scientific_measurement(r'^ { \star \star } P < 0 . 0 1')
+
+    def test_pvalue_triple_star(self):
+        assert _is_scientific_measurement(r'^ { \star \star \star } P < 0 . 0 0 1')
+
+    def test_pvalue_plain(self):
+        assert _is_scientific_measurement(r'\mathsf { P } < 0 . 0 5')
+
+    def test_pvalue_parens(self):
+        assert _is_scientific_measurement(r'( \mathsf { P } < 0 . 0 5 )')
+
+    # --- Scientific notation ---
+    def test_sci_notation_3e6(self):
+        assert _is_scientific_measurement(r'3 \times 1 0 ^ { \wedge } 6')
+
+    def test_sci_notation_5e_3(self):
+        assert _is_scientific_measurement(r'5 . 0 \times 1 0 ^ { \cdot 3 }')
+
+    def test_standalone_times(self):
+        assert _is_scientific_measurement(r'3 \times')
+
+    def test_standalone_times_large(self):
+        assert _is_scientific_measurement(r'1 0 0 , 0 0 0 \times')
+
+    # --- Plus-minus ---
+    def test_pm_alone(self):
+        assert _is_scientific_measurement(r'\pm')
+
+    def test_pm_sd(self):
+        assert _is_scientific_measurement(r'\pm \mathsf { S D }')
+
+    # --- Percentages ---
+    def test_percent_gt50(self):
+        assert _is_scientific_measurement(r'{ > } 5 0 \%')
+
+    def test_percent_sim20(self):
+        assert _is_scientific_measurement(r'{ \sim } 2 0 \%')
+
+    def test_percent_range(self):
+        assert _is_scientific_measurement(r'3 5 \mathrm { - } 4 0 \ \%')
+
+    def test_percent_gt90(self):
+        assert _is_scientific_measurement(r'{ > } 9 0 \%')
+
+    # --- Chemical formulas ---
+    def test_chemical_H2O(self):
+        assert _is_scientific_measurement(r'H _ { 2 } O')
+
+    def test_chemical_CO2(self):
+        assert _is_scientific_measurement(r'\mathsf { C O } _ { 2 }')
+
+    def test_chemical_MgCl2(self):
+        assert _is_scientific_measurement(r'\mathsf { M g C l } _ { 2 }')
+
+    # --- Deletion variants ---
+    def test_deletion_D121(self):
+        assert _is_scientific_measurement(r'{ \mathsf { D } } \Delta 1 2 1')
+
+    def test_deletion_D155(self):
+        assert _is_scientific_measurement(r'D \Delta 1 5 5')
+
+    def test_deletion_H109(self):
+        assert _is_scientific_measurement(r'\mathsf { H } \Delta 1 0 9 )')
+
+    # --- Approximate ---
+    def test_approx_160(self):
+        assert _is_scientific_measurement(r'\sim 1 6 0')
+
+    # --- Greek letters as labels ---
+    def test_standalone_beta(self):
+        assert _is_scientific_measurement(r'\beta \cdot')
+
+    def test_standalone_alpha(self):
+        assert _is_scientific_measurement(r'\alpha')
+
+    # --- Sample sizes ---
+    def test_sample_size_N5(self):
+        assert _is_scientific_measurement(r'N = 5')
+
+    def test_sample_size_n350(self):
+        assert _is_scientific_measurement(r'( n = 3 5 0 )')
+
+    # --- OD measurements ---
+    def test_od600(self):
+        assert _is_scientific_measurement(r'\mathsf { O D } _ { 6 0 0 } = 0 . 8')
+
+    # --- pH ---
+    def test_ph(self):
+        assert _is_scientific_measurement(r'{ \mathsf { p } } { \mathsf { H } } \ 8 . 0')
+
+    # --- Molarity with compound ---
+    def test_mM_CuSO4(self):
+        assert _is_scientific_measurement(r'4 0 \mathrm { \ m M \ C u S O _ { 4 } }')
+
+    # --- Time/duration ---
+    def test_time_30min(self):
+        assert _is_scientific_measurement(r'3 0 \ \mathrm { m i n }')
+
+    def test_time_1h(self):
+        assert _is_scientific_measurement(r'1 \ h')
+
+    # --- Gene with citation superscript ---
+    def test_gene_HK1_29(self):
+        assert _is_scientific_measurement(r'\mathsf { H K } 1 ^ { 2 9 }')
+
+    # === NEGATIVE TESTS: Real math should NOT match ===
+
+    def test_real_math_ripley_K(self):
+        """Ripley's K function — real spatial statistics."""
+        assert not _is_scientific_measurement(
+            r'\boldsymbol { K } ( \boldsymbol { r } )')
+
+    def test_real_math_norm(self):
+        """Norm expression with variables."""
+        assert not _is_scientific_measurement(
+            r'| | x _ { i } - x _ { j } | | \leq r')
+
+    def test_real_math_L_minus_r(self):
+        assert not _is_scientific_measurement(r'L ( r ) - r')
+
+    def test_real_math_weighted_sum(self):
+        assert not _is_scientific_measurement(r'w _ { i j } ^ { - 1 }')
+
+    def test_real_math_equation_equals(self):
+        assert not _is_scientific_measurement(r'L ( r ) - r = 0')
+
+    def test_real_math_fraction(self):
+        assert not _is_scientific_measurement(r'\frac { a } { b }')
+
+    def test_real_math_integral(self):
+        assert not _is_scientific_measurement(r'\int _ 0 ^ 1 f ( x ) d x')
+
+
+class TestScientificLatexToPlainText:
+    """Tests for converting scientific false-positive LaTeX to readable text."""
+
+    def test_calcium_ion(self):
+        result = _latex_to_plain_text(r'{ \mathsf { C a } } ^ { 2 + }')
+        assert 'Ca' in result and '2+' in result, f'Got: {result}'
+
+    def test_temperature(self):
+        result = _latex_to_plain_text(r'3 7 ^ { \circ } \mathsf { C }')
+        assert '37' in result and '°' in result, f'Got: {result}'
+
+    def test_concentration_mu(self):
+        result = _latex_to_plain_text(r'2 5 0 ~ \mu \mathrm { M }')
+        assert '250' in result and 'µ' in result and 'M' in result, f'Got: {result}'
+
+    def test_pvalue(self):
+        result = _latex_to_plain_text(r'^ { \star } P < 0 . 0 5')
+        assert 'P' in result and '0.05' in result, f'Got: {result}'
+
+    def test_delta(self):
+        result = _latex_to_plain_text(r'{ \mathsf { D } } \Delta 1 2 1')
+        assert 'D' in result and 'Δ' in result and '121' in result, f'Got: {result}'
+
+    def test_plus_minus_sd(self):
+        result = _latex_to_plain_text(r'\pm \mathsf { S D }')
+        assert '±' in result and 'SD' in result, f'Got: {result}'
+
+    def test_percentage(self):
+        result = _latex_to_plain_text(r'{ > } 5 0 \%')
+        assert '>' in result and '50' in result and '%' in result, f'Got: {result}'
+
+    def test_chemical_H2O(self):
+        result = _latex_to_plain_text(r'H _ { 2 } O')
+        assert 'H' in result and '2' in result and 'O' in result, f'Got: {result}'
+
+    def test_times_notation(self):
+        result = _latex_to_plain_text(r'3 \times 1 0 ^ { 6 }')
+        assert '3' in result and '×' in result and '10' in result, f'Got: {result}'
+
+    def test_sim_approx(self):
+        result = _latex_to_plain_text(r'{ \sim } 2 0 \%')
+        assert '~' in result and '20' in result and '%' in result, f'Got: {result}'
+
+
+class TestScientificFalsePositiveIntegration:
+    """Integration: scientific false-positive equations become plain text in blocks."""
+
+    def test_calcium_ion_becomes_text(self):
+        block = _make_block([
+            [('activated by ', ContentType.Text),
+             (r'{ \mathsf { C a } } ^ { 2 + }', ContentType.InlineEquation),
+             (' binding', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        assert '{{EQ:' not in text, f'Equation placeholder found: {text}'
+        assert 'Ca' in text, f'Expected "Ca" in text: {text}'
+        assert len(inline_eqs) == 0
+
+    def test_pvalue_becomes_text(self):
+        block = _make_block([
+            [('significant (', ContentType.Text),
+             (r'^ { \star } P < 0 . 0 5', ContentType.InlineEquation),
+             (')', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        assert '{{EQ:' not in text, f'Equation placeholder found: {text}'
+        assert 'P' in text
+        assert len(inline_eqs) == 0
+
+    def test_temperature_becomes_text(self):
+        block = _make_block([
+            [('incubated at ', ContentType.Text),
+             (r'3 7 ^ { \circ } \mathsf { C }', ContentType.InlineEquation),
+             (' for', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        assert '{{EQ:' not in text, f'Equation placeholder found: {text}'
+        assert '37' in text
+        assert len(inline_eqs) == 0
+
+    def test_real_math_still_preserved(self):
+        """Ripley's K function should remain as equation."""
+        block = _make_block([
+            [('the function ', ContentType.Text),
+             (r'\boldsymbol { K } ( \boldsymbol { r } )', ContentType.InlineEquation),
+             (' measures', ContentType.Text)]
+        ])
+        text, _th, _ip, _lx, inline_eqs = _extract_block_content(block, '', 612)
+        assert '{{EQ:' in text, f'Expected equation placeholder: {text}'
+        assert len(inline_eqs) == 1
