@@ -58,7 +58,7 @@ export async function runPipeline(params: {
   const { pipeline, filePath, fileName, jobType, toolConfig, totalPages, keyId, outputFolder, languageCount, existingJobId } = params;
 
   // Calculate and reserve credits
-  const creditsNeeded = calculateCredits(jobType, totalPages, languageCount);
+  const creditsNeeded = calculateCredits(jobType, totalPages, { languageCount });
   const reservation = await reserveCredits(keyId, creditsNeeded, '');
 
   if (!reservation.success) {

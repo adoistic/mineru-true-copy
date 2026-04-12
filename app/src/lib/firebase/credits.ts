@@ -166,10 +166,32 @@ export async function getUsageLogs(keyId: string, limit = 100): Promise<UsageLog
   return snapshot.docs.map(doc => doc.data() as UsageLog);
 }
 
-export function calculateCredits(jobType: JobType, pageCount: number, languageCount = 1): number {
+export type ProcessingMode = 'local' | 'cloud';
+
+export interface CreditOptions {
+  processingMode?: ProcessingMode;
+  tableMode?: ProcessingMode;
+  tablePagesCount?: number;
+  languageCount?: number;
+}
+
+export function calculateCredits(jobType: JobType, pageCount: number, options?: CreditOptions): number {
+  const mode = options?.processingMode ?? 'local';
+  const tableMode = options?.tableMode ?? 'cloud';
+  const languageCount = options?.languageCount ?? 1;
+
   switch (jobType) {
-    case 'ocr':
-      return pageCount; // 1 credit/page
+    case 'ocr': {
+      // Local: 0.25/page, Cloud: 1/page
+      const baseRate = mode === 'local' ? 0.25 : 1;
+      let credits = pageCount * baseRate;
+
+      // Surcharge for cloud tables in local mode: +0.5 per page with tables
+      if (mode === 'local' && tableMode === 'cloud' && (options?.tablePagesCount ?? 0) > 0) {
+        credits += options!.tablePagesCount! * 0.5;
+      }
+      return credits;
+    }
     case 'heading_correction':
       return pageCount; // 1 credit/page
     case 'extract':
