@@ -15,6 +15,7 @@ import base64
 import json
 import os
 import random
+import re
 import threading
 import time
 import warnings
@@ -44,7 +45,8 @@ _429_LOCK = threading.Lock()
 
 def get_429_count() -> int:
     """Return the total number of 429 rate limit responses encountered."""
-    return _429_COUNT
+    with _429_LOCK:
+        return _429_COUNT
 
 
 def reset_429_count():
@@ -402,7 +404,86 @@ Rules:
 - Superscript text: wrap with <sup>...</sup>
 - Subscript text: wrap with <sub>...</sub>
 - No other HTML tags. No CSS. No attributes.
+- NEVER output placeholder or test text. Only output text that is actually \
+visible in the image. If you cannot read a word, skip it.
 """
+
+# ---------------------------------------------------------------------------
+# VLM hallucination filter
+# ---------------------------------------------------------------------------
+# VLMs occasionally hallucinate well-known test strings when they encounter
+# text they cannot read (math, unusual glyphs, degraded scans).  Each word
+# may be individually wrapped in <strong>/<em> by the OCR prompt.
+
+_STRIP_TAG_RE = re.compile(r'</?(?:strong|em|b|i|u|s|sup|sub)>')
+
+_PANGRAM_VARIANTS = [
+    re.compile(
+        r'THE\s+QUICK\s+BROWN\s+FOX\s+JUMPS?\s+OVER\s+THE\s+LAZY\s+DOG',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'THE\s+FIVE\s+BOXING\s+WIZARDS\s+JUMP\s+QUICKLY',
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r'PACK\s+MY\s+BOX\s+WITH\s+FIVE\s+DOZEN\s+LIQUOR\s+JUGS',
+        re.IGNORECASE,
+    ),
+]
+
+
+def _strip_vlm_hallucinations(text: str) -> str:
+    """Remove known VLM hallucination patterns from an OCR text line.
+
+    Strips HTML tags to detect pangrams in the plain text, removes them,
+    then rebuilds using a tag-tolerant regex on the original HTML.
+    Returns empty string if the entire line was a hallucination.
+    """
+    plain = _STRIP_TAG_RE.sub('', text)
+    for pat in _PANGRAM_VARIANTS:
+        if pat.search(plain):
+            # Build a tag-tolerant regex that matches the pangram even when
+            # words are wrapped in arbitrary <strong>/<em>/etc. tags, whether
+            # each word is individually wrapped or groups of words share a tag.
+            tag_gap = r'(?:\s*</?(?:strong|em|b|i|u|s|sup|sub)>\s*)*'
+            tolerant = tag_gap + tag_gap.join(
+                re.escape(w) for w in pat.pattern.replace(r'\s+', ' ')
+                    .replace('S?', 'S').split(' ')
+                    # Fallback: split the canonical words from the pattern
+            )
+            # Simpler: just remove the pangram from plain text, then
+            # rebuild by finding and removing the corresponding tagged region
+            cleaned_plain = pat.sub('', plain).strip()
+            cleaned_plain = re.sub(r'\s{2,}', ' ', cleaned_plain)
+            cleaned_plain = re.sub(r'\.?\s*$', '', cleaned_plain).strip()
+
+            # Now remove the pangram from the original tagged text.
+            # Strategy: build a regex where each word in the pangram can have
+            # optional HTML tags and whitespace around it.
+            words = pat.search(plain).group(0).split()
+            tag_tolerant_parts = []
+            for w in words:
+                tag_tolerant_parts.append(
+                    rf'(?:</?(?:strong|em|b|i|u|s|sup|sub)>\s*)*'
+                    rf'{re.escape(w)}'
+                    rf'(?:\s*</?(?:strong|em|b|i|u|s|sup|sub)>)*'
+                )
+            tag_tolerant_re = re.compile(
+                r'\s*'.join(tag_tolerant_parts) + r'\.?',
+                re.IGNORECASE,
+            )
+            result = tag_tolerant_re.sub('', text)
+            # Clean up empty tags left behind, e.g. <strong></strong>
+            result = re.sub(r'<(\w+)>\s*</\1>', '', result)
+            result = re.sub(r'\s{2,}', ' ', result).strip()
+
+            if result:
+                logger.info(f"[VisionLLM] stripped pangram hallucination, kept: {result[:80]}")
+            else:
+                logger.info("[VisionLLM] entire line was pangram hallucination, dropping")
+            return result
+    return text
 
 
 class VisionLLMOCR:
@@ -611,8 +692,13 @@ class VisionLLMOCR:
                 text = line
             # LLMs may embed \n within a single "line" — split them out
             for sub in text.split("\n"):
-                if sub.strip():
-                    results.append((sub.strip(), 0.95))
+                sub = sub.strip()
+                if not sub:
+                    continue
+                # Strip known VLM hallucination patterns (e.g. pangrams)
+                sub = _strip_vlm_hallucinations(sub)
+                if sub:
+                    results.append((sub, 0.95))
 
         if not results:
             logger.warning("[VisionLLM] all lines empty for region — marking unreadable")

@@ -189,6 +189,7 @@ from magic_pdf.config.ocr_content_type import ContentType
 
 import base64
 import hashlib
+import re
 import re as _re
 import fitz  # PyMuPDF
 
@@ -225,6 +226,7 @@ def _crop_and_embed(bbox, page_idx, fitz_page, img_dir: str, pdf_md5: str,
 # Task store (in-memory) with LRU eviction
 MAX_TASKS = 3
 tasks: dict[str, dict] = {}
+_tasks_lock = threading.Lock()  # Protects tasks dict writes from worker/cleanup races
 
 
 def _safe_bbox(val) -> list:
@@ -366,7 +368,10 @@ def _cleanup_task_unlocked(task_id: str, *, remove_from_store: bool = False):
 def _evict_old_tasks():
     """Evict oldest tasks when over MAX_TASKS limit."""
     while len(tasks) > MAX_TASKS:
-        oldest_id = next(iter(tasks))
+        with _tasks_lock:
+            oldest_id = next(iter(tasks), None)
+        if not oldest_id:
+            break
         _cleanup_task(oldest_id, remove_from_store=True)
         logger.info('Evicted task %s (%d remaining)', oldest_id, len(tasks),
                     extra={'task_id': oldest_id})
@@ -536,17 +541,19 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         free_bytes = _shutil_check.disk_usage(tempfile.gettempdir()).free
         MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
         if free_bytes < MIN_FREE_BYTES:
-            tasks[task_id]['status'] = 'failed'
-            tasks[task_id]['_completed_at'] = time.time()
-            tasks[task_id]['error'] = (
-                f'Insufficient disk space: {free_bytes / (1024**3):.1f}GB free, '
-                f'need at least 2GB'
-            )
+            with _tasks_lock:
+                tasks[task_id]['status'] = 'failed'
+                tasks[task_id]['_completed_at'] = time.time()
+                tasks[task_id]['error'] = (
+                    f'Insufficient disk space: {free_bytes / (1024**3):.1f}GB free, '
+                    f'need at least 2GB'
+                )
             logger.error('Insufficient disk space: %.1fGB free, need 2GB',
                          free_bytes / (1024**3), extra={'task_id': task_id})
             return
 
-        tasks[task_id]['status'] = 'processing'
+        with _tasks_lock:
+            tasks[task_id]['status'] = 'processing'
         t_start = time.time()
         config = config or {}
 
@@ -696,6 +703,10 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 block_types[bt] = block_types.get(bt, 0) + 1
             logger.debug('Page %d: block types = %s', page_idx, block_types)
 
+            # Pre-compute page-level position data for decorative detection
+            _page_line_height = _typical_line_height(para_blocks)
+            _page_x_union = _content_x_union(para_blocks)
+
             blocks = []
             for _bi, b in enumerate(para_blocks):
                 block_type = b.get('type', 'text')
@@ -725,7 +736,8 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
                 if (block_type == 'text'
                         and config.get('figure_display') == 'image'
                         and page_idx < len(_fitz_doc)
-                        and _is_decorative_block(b, text, width)):
+                        and _is_decorative_block(b, text, width,
+                                               _page_line_height, _page_x_union)):
                     crop = _crop_and_embed(bbox, page_idx, _fitz_doc[page_idx],
                                            img_dir, _pdf_md5, 'sidebar')
                     if crop:
@@ -876,12 +888,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         if _used_fonts:
             result['used_fonts'] = _used_fonts
 
-        tasks[task_id]['status'] = 'completed'
-        tasks[task_id]['_completed_at'] = time.time()
-        tasks[task_id]['result'] = result
-        tasks[task_id]['_img_dir'] = img_dir
-        # Store PDF bytes for page image rasterization (true-copy export)
-        tasks[task_id]['_pdf_bytes'] = pdf_bytes
+        with _tasks_lock:
+            tasks[task_id]['status'] = 'completed'
+            tasks[task_id]['_completed_at'] = time.time()
+            tasks[task_id]['result'] = result
+            tasks[task_id]['_img_dir'] = img_dir
+            # Store PDF bytes for page image rasterization (true-copy export)
+            tasks[task_id]['_pdf_bytes'] = pdf_bytes
         # Drop heavy intermediates immediately. pipe_result holds tensors and
         # the full inference state (~100-300MB); Next.js never calls the native
         # /export endpoints so we can free it now instead of at LRU eviction.
@@ -898,12 +911,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         tb_str = traceback.format_exc()
         logger.error('Task %s exception:\n%s', task_id, tb_str,
                      extra={'task_id': task_id, 'error': str(e)})
-        tasks[task_id]['status'] = 'failed'
-        tasks[task_id]['_completed_at'] = time.time()
-        # Include traceback location in the error for client-side debugging
-        tb_lines = tb_str.strip().split('\n')
-        location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
-        tasks[task_id]['error'] = f'{e} | at: {location}'
+        with _tasks_lock:
+            tasks[task_id]['status'] = 'failed'
+            tasks[task_id]['_completed_at'] = time.time()
+            # Include traceback location in the error for client-side debugging
+            tb_lines = tb_str.strip().split('\n')
+            location = tb_lines[-2].strip() if len(tb_lines) >= 2 else ''
+            tasks[task_id]['error'] = f'{e} | at: {location}'
         logger.error('Task %s failed: %s', task_id, e, extra={'task_id': task_id})
     finally:
         # Ensure fitz doc is closed even on error (may already be closed on success path)
@@ -1001,7 +1015,13 @@ def _recover_discarded_blocks(pdf_info_raw: list, pages: list, img_dir: str,
             # happen to repeat on every page get cropped as images when user
             # selected "include as image", instead of being treated as headers
             page_w = pages[pi]['page_size']['width'] if pi < len(pages) else 612
-            is_decorative = _is_decorative_block(db, text, page_w)
+            # Use the page's real para_blocks for position-aware detection
+            _discard_para = pdf_info_raw[pi].get('para_blocks',
+                                                  pdf_info_raw[pi].get('preproc_blocks', []))
+            _discard_lh = _typical_line_height(_discard_para)
+            _discard_xu = _content_x_union(_discard_para)
+            is_decorative = _is_decorative_block(db, text, page_w,
+                                                 _discard_lh, _discard_xu)
 
             if is_decorative and (is_repeating or is_page_num):
                 # Decorative repeating element (QR code, logo, icon on every page).
@@ -1101,15 +1121,350 @@ def _unescape_markdown(text: str) -> str:
     return text.replace('\\*', '*').replace('\\`', '`').replace('\\~', '~')
 
 
+# LaTeX commands that indicate real math (not just numbers + units).
+# If a LaTeX string contains ANY of these, it's a genuine equation.
+_MATH_INDICATOR_RE = re.compile(
+    r'\\(?:'
+    # Greek letters
+    r'alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|'
+    r'xi|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|'
+    r'Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|'
+    r'Xi|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|'
+    # Operators and relations
+    r'frac|sqrt|sum|prod|int|oint|lim|inf|sup|min|max|'
+    r'times|div|pm|mp|cdot|circ|ast|star|'
+    r'leq|geq|neq|approx|equiv|sim|simeq|cong|propto|'
+    r'lesssim|gtrsim|ll|gg|prec|succ|subset|supset|subseteq|supseteq|'
+    r'in|notin|ni|forall|exists|nexists|'
+    # Arrows
+    r'to|rightarrow|leftarrow|Rightarrow|Leftarrow|mapsto|'
+    # Decorations
+    r'hat|bar|tilde|vec|dot|ddot|overline|underline|widehat|widetilde|'
+    # Structures
+    r'mathbb|mathcal|mathfrak|mathscr|'
+    r'left|right|begin|end|'
+    r'binom|choose|'
+    # Functions
+    r'log|ln|exp|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|'
+    r'det|ker|dim|hom|'
+    # Misc math
+    r'infty|partial|nabla|ell|wp|Re|Im|'
+    r'otimes|oplus|wedge|vee|cap|cup'
+    r')\b'
+)
+
+
+def _normalize_equation_latex(latex: str) -> str:
+    """Normalize MinerU's heavily-spaced LaTeX for pattern classification.
+
+    MinerU's OCR produces LaTeX with excessive spacing (``C a`` instead of
+    ``Ca``, ``0 . 0 5`` instead of ``0.05``) and font wrappers
+    (``\\mathsf{}``, ``\\mathtt{}``) around plain text. This function
+    produces a compact form for scientific-measurement pattern matching.
+    """
+    s = latex
+    # LaTeX hard space "\ " (backslash-space) → regular space
+    s = s.replace('\\ ', ' ')
+    # Strip ALL font-wrapper commands iteratively (handles nesting)
+    for _ in range(3):
+        s = re.sub(
+            r'\\(?:mathsf|mathtt|mathfrak|boldsymbol|textsf|texttt|bf|tt|'
+            r'mathrm|text|mathbf|textbf|textrm|mbox)\s*\{([^}]*)\}',
+            r'\1', s)
+    # Strip standalone font switches (no braces): \tt, \bf, \it, \rm, \sf
+    s = re.sub(r'\\(?:tt|bf|it|rm|sf)\b\s*', '', s)
+    # Handle \mathsf X (single char without braces, MinerU quirk)
+    s = re.sub(r'\\(?:mathsf|mathtt|mathfrak|boldsymbol)\s+(?=\w)', '', s)
+    # LaTeX-escaped punctuation: \% → %, \# → #
+    s = re.sub(r'\\([%#&$])', r'\1', s)
+    # Remove \left, \right, \big, etc.
+    s = re.sub(r'\\(?:left|right|big|Big|bigg|Bigg)\b\s*', '', s)
+    # Protect LaTeX commands with placeholders so char-collapsing doesn't
+    # merge command names with adjacent text (e.g. \circ + C → \circC)
+    commands: list[str] = []
+    def _protect(m: re.Match) -> str:
+        commands.append(m.group(0))
+        return f'\x00{len(commands) - 1}\x00'
+    s = re.sub(r'\\[A-Za-z]+', _protect, s)
+    # Remove all remaining braces
+    s = s.replace('{', '').replace('}', '')
+    # ~ is non-breaking space in LaTeX
+    s = s.replace('~', ' ')
+    # Normalize multiple spaces to single before collapsing
+    s = re.sub(r'\s+', ' ', s)
+    # Collapse char-by-char spacing (MinerU OCR quirk)
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r'(?<=[\w.]) (?=[\w.])', '', s)
+        s = re.sub(r'(?<=\d) (?=[+\-])', '', s)
+        s = re.sub(r'(?<=[+\-]) (?=\d)', '', s)
+        # Collapse spaces around commas in numbers: "100 , 000" → "100,000"
+        s = re.sub(r'(?<=\d) (?=,)', '', s)
+        s = re.sub(r'(?<=,) (?=\d)', '', s)
+    # Collapse spaces around ^ and _ and /
+    s = re.sub(r' / ', '/', s)
+    s = re.sub(r'\s*\^\s*', '^', s)
+    s = re.sub(r'\s*_\s*', '_', s)
+    # Restore LaTeX commands
+    for i, cmd in enumerate(commands):
+        s = s.replace(f'\x00{i}\x00', cmd)
+    # Clean whitespace
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _is_scientific_measurement(latex: str) -> bool:
+    """Detect scientific measurements/notations that use math-like LaTeX.
+
+    MinerU wraps concentrations (250 µM), temperatures (37°C), P-values
+    (*P < 0.05), chemical ions (Ca²⁺), scientific notation (3×10⁶), etc.
+    in LaTeX commands like ``\\mu``, ``\\circ``, ``\\times``, ``\\star``,
+    ``\\pm``, ``\\Delta`` that appear in the math-indicator regex but are
+    NOT actual mathematics.
+
+    Returns True if the expression matches a known scientific pattern.
+    """
+    norm = _normalize_equation_latex(latex)
+    # --- Chemical ions: Ca^2+, Mg^2+, Fe^3+, Na+, Zn^2+ ---
+    if re.fullmatch(r'[A-Z][a-z]?\^?\d*[+\-]+\.?', norm):
+        return True
+    # --- Temperature: 37^\circ C, 95^\circ C, 4^\circ C ---
+    if re.fullmatch(r'\d+\.?\d*\^?\\circ\s*[CF]\.?', norm):
+        return True
+    # --- Concentration with µ: 250\mu M, 0.45\mu m, 8\mu g/mL ---
+    if re.fullmatch(r'\d+\.?\d*\s*\\mu\s*[A-Za-z][A-Za-z/]*\.?', norm):
+        return True
+    # --- Concentration/measurement units: 20mM, 150mM, 0.4M, 30min, 24h ---
+    if re.fullmatch(
+            r'\d+\.?\d*\s*'
+            r'(?:mM|nM|[munp]M|M|mL|[munp]L|L|mg|[munp]g|kg|g|mol|'
+            r'min|h|s|nm|mm|cm|m)\b[/A-Za-z]*\.?', norm):
+        return True
+    # --- mg/L, mg/mL, µg/mL with number ---
+    if re.fullmatch(r'\d+\.?\d*\s*[A-Za-zµ]+/[A-Za-z]+\.?', norm):
+        return True
+    # --- P-values: ^\star P<0.05, P<0.05, (P<0.05), ^\star\star P < ---
+    if re.search(r'(?:\^?\\star\s*)*P\s*[<>=]\s*\d*\.?\d*', norm):
+        return True
+    # --- Scientific notation: 3\times 10^6, 5.0\times 10^-3 ---
+    if re.search(r'\d+\.?\d*\s*\\times\s*10\^', norm):
+        return True
+    # --- Standalone \times with just a number: 3\times, 100,000\times ---
+    if re.fullmatch(r'[\d,.\s]+\s*\\times\.?', norm):
+        return True
+    # --- \times followed by a single digit: \times 2, 6\times ---
+    if re.fullmatch(r'\\times\s*\d?\.?', norm):
+        return True
+    # --- Plus-minus: \pm, \pm SD, \pm SEM ---
+    if re.fullmatch(r'\\pm\s*(?:SD|SEM|S\.?D\.?|s\.?d\.?)?\.?', norm):
+        return True
+    # --- Percentages: >50%, ~70%, \sim 20%, 35-40%, (25-30%) ---
+    if re.fullmatch(r'[()><=]*\s*(?:\\sim\s*)?[\d.\-\s]+\s*%\s*[).]?', norm):
+        return True
+    # --- Chemical formulas: H_2O, CO_2, MgCl_2, CuSO_4, NaCl ---
+    if re.fullmatch(r'(?:[A-Z][a-z]?\d*(?:_\d+)?\s*){2,}\.?', norm):
+        return True
+    # --- Deletion/truncation variants: D\Delta 121, H\Delta 109, (D\Delta 170) ---
+    if re.fullmatch(r'\(?\s*[A-Z]\s*\\Delta\s*\d+\s*\)?\.?', norm):
+        return True
+    # --- Approximate + number: \sim 160, \sim 5000 ---
+    if re.fullmatch(r'\\sim\s*\d+\.?\d*', norm):
+        return True
+    # --- Standalone single Greek letter (used as label): \beta, \alpha, \beta· ---
+    if re.fullmatch(
+            r'\\(?:alpha|beta|gamma|delta|epsilon|chi|phi|psi|omega)'
+            r'\s*(?:\\cdot)?[\-.]?\s*(?:[A-Za-z]+)?\.?', norm):
+        return True
+    # --- Sample sizes: N=5, n=350, (n=350) ---
+    if re.fullmatch(r'\(?\s*[Nn]\s*=\s*\d+\s*\)?', norm):
+        return True
+    # --- OD measurements: OD_600=0.8 ---
+    if re.search(r'OD_?\d+\s*=\s*\d', norm):
+        return True
+    # --- pH values: pH 8.0, pH8.0 ---
+    if re.fullmatch(r'pH?\s*H?\s*\d+\.?\d*', norm):
+        return True
+    # --- Gene/protein with citation superscript: HK1^29 ---
+    if re.fullmatch(r'[A-Z][A-Za-z]*\s*\d*\^\d+\.?', norm):
+        return True
+    # --- Protein + ion compound: BIK1 + Ca^2+ ---
+    if re.search(r'[A-Z]{2,}\d*\s*[+]\s*[A-Z][a-z]?\^?\d*[+\-]', norm):
+        return True
+    # --- Cross-reference labels: (i-k), (a-c) ---
+    if re.fullmatch(r'\(\s*[a-z]\s*-\s*[a-z]\s*\)', norm):
+        return True
+    # --- Molarity with compound: 40mM CuSO_4, 1mM 3-AT ---
+    if re.search(r'\d+\.?\d*\s*(?:mM|[munp]M|M)\s*[A-Za-z0-9\-_]+', norm):
+        return True
+    # --- Single number with \cdot (misread decimal): \cdot=20.53 ---
+    if re.fullmatch(r'\\cdot\s*=?\s*\d+\.?\d*', norm):
+        return True
+    # --- Subscript + \times (fragment): _3\times ---
+    if re.fullmatch(r'_?\d+\s*\\times\.?', norm):
+        return True
+    # --- \cdot + Greek (e.g. ·β for β-actin): \cdot \beta ---
+    if re.fullmatch(
+            r'\\cdot\s*\\(?:alpha|beta|gamma|delta|chi|phi|omega)\.?',
+            norm):
+        return True
+    # --- Concentration with colon separator (LaTeX thin space): 150:mM:NaCl ---
+    if re.search(r'\d+\s*:?\s*(?:mM|[munp]M|M)\s*:?\s*[A-Za-z]', norm):
+        return True
+    # --- µ OCR errors: \mu\mu (doubled), \mu\iota (misread L) ---
+    if re.fullmatch(r'\d+\.?\d*\s*\\mu\s*(?:\\mu|\\iota)\.?', norm):
+        return True
+    # --- Square units: 1 µm², \mu m^2 ---
+    if re.fullmatch(r'\d+\.?\d*\s*\\mu\s*[A-Za-z]+\^\d+\.?', norm):
+        return True
+    # --- \dot\cdot = number (OCR garble for cut-off value) ---
+    if re.fullmatch(r'\\dot\s*\\cdot\s*=?\s*\d+\.?\d*', norm):
+        return True
+    # --- Standalone single letter with period (misread Greek): a., q. ---
+    if re.fullmatch(r'[a-z]\.?', norm):
+        return True
+    # --- Protein + ion with pipe OCR: B|K1+Ca^2+ ---
+    if re.search(r'[A-Z]\s*\|\s*[A-Za-z0-9]+\s*[+]\s*[A-Z][a-z]?\^?\d*[+\-]', norm):
+        return True
+    return False
+
+
+def _is_false_positive_equation(latex: str) -> bool:
+    """Detect inline equations that are actually just text/numbers/measurements.
+
+    MinerU's YOLO layout detector misclassifies number+unit patterns like
+    "10-50 Km", "150 mm", "Ca²⁺", "250 µM", "*P < 0.05" as inline
+    equations. These are scientific notation, not math.
+
+    Returns True if the LaTeX content is a scientific measurement or has
+    NO real math indicators and is likely just a text fragment.
+    """
+    if not latex:
+        return True
+    # PRIORITY: detect scientific measurements that use math-like commands.
+    # This must run BEFORE the math-indicator check because commands like
+    # \mu, \times, \circ, \star, \pm, \Delta are used in both math AND
+    # scientific notation (e.g. 250 \mu M, 37^\circ C, 3 \times 10^6).
+    if _is_scientific_measurement(latex):
+        return True
+    # If it contains any real math command, it's a genuine equation
+    if _MATH_INDICATOR_RE.search(latex):
+        return False
+    # Strip text-mode wrappers, common LaTeX escapes, and structural chars
+    stripped = latex
+    # Remove ALL font wrappers (including \mathsf, \mathtt, \mathfrak)
+    for _ in range(3):
+        stripped = re.sub(
+            r'\\(?:mathrm|text|mathbf|textbf|textrm|mbox|'
+            r'mathsf|mathtt|mathfrak|boldsymbol|textsf|texttt)\s*\{([^}]*)\}',
+            r'\1', stripped)
+    # Remove LaTeX-escaped punctuation: \%, \#, \&, \$
+    stripped = re.sub(r'\\([%#&$])', r'\1', stripped)
+    # Check for superscript/subscript with variables — these indicate real math
+    # e.g. x^2, a_n, T^{d} are math; but 10^3 could be either
+    if re.search(r'[A-Za-z]\s*[\^_]', stripped) or re.search(r'[\^_]\s*\{?\s*[A-Za-z]', stripped):
+        return False
+    # Remove remaining braces, tildes, spaces
+    stripped = re.sub(r'[{}\s~^_]', '', stripped)
+    # What's left should be only simple characters if it's a false positive
+    # Digits, letters, hyphens, dots, commas, colons, slashes, percent, degree
+    if re.fullmatch(r'[A-Za-z0-9.,:\-/°%×#&$+]+', stripped):
+        return True
+    return False
+
+
+def _latex_to_plain_text(latex: str) -> str:
+    """Convert false-positive equation LaTeX back to readable plain text.
+
+    Handles MinerU's OCR quirks: spaced-out characters ("1 5 0" → "150",
+    "K m" → "Km"), braced operators ("{-}" → "-"), text-mode wrappers,
+    tildes as spaces. Also converts Greek/math symbols to Unicode.
+    """
+    text = latex
+    # LaTeX hard space "\ " → regular space
+    text = text.replace('\\ ', ' ')
+    # Unwrap ALL font wrappers — collapse inner char spacing
+    def _unwrap_text_cmd(m):
+        inner = m.group(1)
+        # Collapse single-char spacing inside text commands: "K m" → "Km"
+        inner = re.sub(r'(?<=\w) (?=\w)', '', inner)
+        inner = inner.replace('{', '').replace('}', '')
+        return ' ' + inner.strip()
+    for _ in range(3):  # handle nesting
+        text = re.sub(
+            r'\\(?:mathrm|text|mathbf|textbf|textrm|mbox|'
+            r'mathsf|mathtt|mathfrak|boldsymbol|textsf|texttt)\s*\{([^}]*)\}',
+            _unwrap_text_cmd, text)
+    # Strip standalone font switches (no braces): \tt, \bf, \it, \rm, \sf
+    text = re.sub(r'\\(?:tt|bf|it|rm|sf)\b\s*', '', text)
+    # ~ is non-breaking space in LaTeX — must convert BEFORE \sim → ~
+    text = text.replace('~', ' ')
+    # Greek letters → Unicode
+    _greek = {
+        'alpha': 'α', 'beta': 'β', 'gamma': 'γ', 'delta': 'δ',
+        'epsilon': 'ε', 'zeta': 'ζ', 'eta': 'η', 'theta': 'θ',
+        'iota': 'ι', 'kappa': 'κ', 'lambda': 'λ', 'mu': 'µ',
+        'nu': 'ν', 'xi': 'ξ', 'pi': 'π', 'rho': 'ρ',
+        'sigma': 'σ', 'tau': 'τ', 'upsilon': 'υ', 'phi': 'φ',
+        'chi': 'χ', 'psi': 'ψ', 'omega': 'ω',
+        'Delta': 'Δ', 'Sigma': 'Σ', 'Omega': 'Ω', 'Pi': 'Π',
+        'Gamma': 'Γ', 'Lambda': 'Λ', 'Theta': 'Θ', 'Phi': 'Φ',
+        'Psi': 'Ψ', 'Xi': 'Ξ',
+    }
+    for cmd, char in _greek.items():
+        text = re.sub(rf'\\{cmd}\b\s*', char, text)
+    # Math symbols → Unicode
+    text = re.sub(r'\\circ\b\s*', '°', text)
+    text = re.sub(r'\\times\b\s*', '×', text)
+    text = re.sub(r'\\pm\b\s*', '±', text)
+    text = re.sub(r'\\star\b\s*', '*', text)
+    text = re.sub(r'\\sim\b\s*', '~', text)
+    text = re.sub(r'\\cdot\b\s*', '·', text)
+    text = re.sub(r'\\langle\b\s*', '⟨', text)
+    text = re.sub(r'\\rangle\b\s*', '⟩', text)
+    text = re.sub(r'\\leq\b\s*', '≤', text)
+    text = re.sub(r'\\geq\b\s*', '≥', text)
+    text = re.sub(r'\\neq\b\s*', '≠', text)
+    text = re.sub(r'\\approx\b\s*', '≈', text)
+    text = re.sub(r'\\infty\b\s*', '∞', text)
+    # LaTeX-escaped punctuation: \% → %, \# → #
+    text = re.sub(r'\\([%#&$])', r'\1', text)
+    # Strip any remaining backslash commands we don't recognize
+    text = re.sub(r'\\[A-Za-z]+\s*', '', text)
+    # {-} → -, {+} → +
+    text = text.replace('{-}', '-').replace('{+}', '+')
+    # Remove remaining braces
+    text = text.replace('{', '').replace('}', '')
+    # ^ → superscript (simplified: just remove ^ for plain text)
+    # _ → subscript (simplified: just remove _ for plain text)
+    text = text.replace('^', '').replace('_', '')
+    # Normalize multiple spaces
+    text = re.sub(r'\s+', ' ', text)
+    # Collapse single-char spacing for digits: "1 0" → "10", "0 . 0 5" → "0.05"
+    prev = None
+    while prev != text:
+        prev = text
+        text = re.sub(r'(?<=\d) (?=[\d.])', '', text)
+        text = re.sub(r'(?<=\.) (?=\d)', '', text)
+    # Collapse digit+sign spacing: "2 +" → "2+", "3 -" → "3-"
+    text = re.sub(r'(?<=\d) (?=[+\-])', '', text)
+    text = re.sub(r'(?<=[+\-]) (?=\d)', '', text)
+    # Collapse hyphen spacing: "10 - 50" → "10-50"
+    text = re.sub(r'(\d) *- *(\d)', r'\1-\2', text)
+    # Collapse spaces around /: "g / mL" → "g/mL"
+    text = re.sub(r' / ', '/', text)
+    # Clean up whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
 def _is_valid_roman(s: str) -> bool:
     """Check if a string is a valid Roman numeral (i through xxxix)."""
-    import re
     return bool(re.match(r'^(?:x{0,3})(?:ix|iv|v?i{0,3})$', s.lower())) and len(s) > 0
 
 
 def _is_list_item(line: str) -> bool:
     """Detect whether a line starts with any list/bullet/numbering pattern."""
-    import re
     # Bullets: •○▪▫–—➤‣›▶►∙★☆ etc.
     if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
         return True
@@ -1151,13 +1506,67 @@ def _detect_list_content(text: str) -> bool:
     return list_count / len(lines) >= 0.6
 
 
-def _is_decorative_block(block: dict, text: str, page_width: float = 612) -> bool:
+def _typical_line_height(para_blocks: list) -> float | None:
+    """Compute median line height from line-level bboxes across all blocks.
+
+    Returns None if insufficient data (fewer than 3 text blocks or no lines).
+    """
+    text_block_count = 0
+    heights: list[float] = []
+    for b in para_blocks:
+        if b.get('type', 'text') not in ('text', 'title', 'list', 'index'):
+            continue
+        text_block_count += 1
+        # para_blocks may have direct lines or nested blocks[].lines[]
+        line_sources = [b]
+        for inner in b.get('blocks', []):
+            line_sources.append(inner)
+        for src in line_sources:
+            for line in src.get('lines', []):
+                lb = line.get('bbox')
+                if lb and len(lb) >= 4:
+                    h = lb[3] - lb[1]
+                    if h > 0:
+                        heights.append(h)
+    if text_block_count < 3 or not heights:
+        return None
+    heights.sort()
+    return heights[len(heights) // 2]
+
+
+def _content_x_union(para_blocks: list) -> tuple[float, float] | None:
+    """Compute the union x-range of all text blocks on a page."""
+    x0s: list[float] = []
+    x1s: list[float] = []
+    for b in para_blocks:
+        if b.get('type', 'text') not in ('text', 'title', 'list', 'index'):
+            continue
+        bbox = _safe_bbox(b.get('bbox'))
+        w = bbox[2] - bbox[0]
+        if w > 0:
+            x0s.append(bbox[0])
+            x1s.append(bbox[2])
+    if not x0s:
+        return None
+    return (min(x0s), max(x1s))
+
+
+def _is_decorative_block(block: dict, text: str, page_width: float = 612,
+                         line_height: float | None = None,
+                         x_union: tuple[float, float] | None = None) -> bool:
     """Detect blocks that are decorative rather than content.
 
     Unified detection covering:
     1. Narrow vertical strips (arXiv IDs, watermarks, vertical barcodes)
     2. Small blocks with minimal text (logos, QR codes, icons)
     3. Blocks with very low text density relative to their area
+
+    Position-aware: rules 2 and 3 are gated on the block being outside the
+    content area (no significant x-overlap with text blocks) OR taller than
+    normal text lines.  Inline content fragments are never classified as
+    decorative.  When position data is unavailable (line_height=None),
+    rules 2 and 3 are suppressed entirely to avoid false positives on
+    sparse pages.
 
     Returns True if the block should be treated as a decorative image
     rather than text content.
@@ -1177,6 +1586,20 @@ def _is_decorative_block(block: dict, text: str, page_width: float = 612) -> boo
     if aspect_ratio > 6 and width < 60:
         return True
 
+    # Position gate for rules 2 and 3:
+    # If we lack position data (sparse page), suppress these rules entirely
+    # to avoid false positives on inline content fragments.
+    if line_height is None or x_union is None:
+        return False
+
+    # Check if block is inline content: normal line height AND significant
+    # x-overlap with the union of all text block x-ranges.
+    is_normal_height = height < 2 * line_height
+    x_overlap = max(0.0, min(bbox[2], x_union[1]) - max(bbox[0], x_union[0]))
+    has_significant_overlap = x_overlap > 0.5 * width
+    if is_normal_height and has_significant_overlap:
+        return False  # Inline content — never decorative
+
     # 2. Small blocks with short text: likely icons, logos, QR codes
     #    Block is small relative to page AND has very little text (but not empty)
     is_small = width < page_width * 0.15 and height < 100
@@ -1193,7 +1616,7 @@ def _is_decorative_block(block: dict, text: str, page_width: float = 612) -> boo
 
 def _is_decorative_sidebar(block: dict) -> bool:
     """Legacy wrapper — use _is_decorative_block instead."""
-    return _is_decorative_block(block, '', 612)
+    return _is_decorative_block(block, '', 612)  # no position data → rules 2/3 suppressed
 
 
 def _extract_block_content(block: dict, img_dir: str = '',
@@ -1453,6 +1876,13 @@ def _join_lines_for_html(block: dict, img_dir: str = '',
             if not content:
                 continue
             if span_type in (CT.InterlineEquation, CT.InlineEquation):
+                # Check for false positive: MinerU misclassifies number+unit
+                # patterns (e.g. "10-50 Km", "150 mm") as inline equations.
+                if _is_false_positive_equation(content):
+                    plain = _latex_to_plain_text(content)
+                    if plain:
+                        parts.append(plain)
+                    continue
                 display = 'block' if span_type == CT.InterlineEquation else 'inline'
                 eq_idx = len(inline_equations)
                 eq_entry = {'latex': content, 'display': display}
@@ -1523,6 +1953,30 @@ def _join_lines_for_html(block: dict, img_dir: str = '',
         # Split at [N] or (N) boundaries, keeping the marker with its text
         parts = re.split(r'(?=(?:\[\d+\]|\(\d+\))\s)', result)
         result = '\n'.join(p.strip() for p in parts if p.strip())
+
+    # Strip VLM pangram hallucinations from assembled text.
+    # The VLM sometimes hallucinates "THE QUICK BROWN FOX..." when it
+    # can't read text (math, glyphs). The per-line filter in vision_llm_ocr.py
+    # catches most cases, but some slip through when spans are assembled.
+    _pangram_tag_tolerant = re.compile(
+        r'(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'THE\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'QUICK\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'BROWN\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'FOX\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'JUMPS?\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'OVER\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'THE\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'LAZY\s+(?:</?(?:strong|em|b|i|u|s)>\s*)*'
+        r'DOG(?:</?(?:strong|em|b|i|u|s)>\s*)*\.?',
+        re.IGNORECASE,
+    )
+    if _pangram_tag_tolerant.search(result):
+        result = _pangram_tag_tolerant.sub('', result)
+        # Clean up empty tags and extra whitespace
+        result = re.sub(r'<(\w+)>\s*</\1>', '', result)
+        result = re.sub(r'\s{2,}', ' ', result).strip()
+        logger.info('Stripped pangram hallucination from assembled block text')
 
     return result, inline_equations
 
@@ -2074,12 +2528,13 @@ class MineruHandler(BaseHTTPRequestHandler):
 
         # Create task and start processing
         task_id = str(uuid.uuid4())
-        tasks[task_id] = {
-            'task_id': task_id,
-            'status': 'pending',
-            'result': None,
-            'error': None,
-        }
+        with _tasks_lock:
+            tasks[task_id] = {
+                'task_id': task_id,
+                'status': 'pending',
+                'result': None,
+                'error': None,
+            }
         _evict_old_tasks()
 
         logger.info('Task %s created for %s (%d bytes), config=%s',
