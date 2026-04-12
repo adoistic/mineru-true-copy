@@ -488,7 +488,7 @@ _CORE_MODELS = {
 }
 _LOCAL_OCR_MODELS = {
     'OCR/paddleocr_torch/Multilingual_PP-OCRv3_det_infer.pth': 'Text detection (PaddleOCR)',
-    'OCR/paddleocr_torch/ch_PP-OCRv4_rec_infer.pth': 'Text recognition (PaddleOCR)',
+    'OCR/paddleocr_torch/en_PP-OCRv5_rec_infer.pth': 'Text recognition (PaddleOCR)',
 }
 
 
