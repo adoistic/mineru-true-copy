@@ -2839,6 +2839,11 @@ def _pre_warm_models():
         logger.info('Pre-warming models...')
         t0 = time.time()
 
+        # Warm up using cloud mode (VisionLLM). Local PaddleOCR models are
+        # lazy-loaded on first local-mode request to save RAM.
+        from lib.patch_mineru import set_processing_mode
+        set_processing_mode(ocr_mode='cloud', table_mode='cloud')
+
         # Create a minimal 1-page blank PDF to trigger model loading
         import fitz  # pymupdf
         doc = fitz.open()
