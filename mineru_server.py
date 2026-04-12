@@ -796,12 +796,13 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         t_start = time.time()
         config = config or {}
 
-        ocr_lang_raw = _config.get('ocr_lang', 'en')
+        ocr_lang_raw = _config.get('ocr_lang', 'auto')
         # Handle auto-detect and multi-lang (comma-separated)
         if ocr_lang_raw == 'auto':
-            ocr_lang = _detect_script(pdf_bytes)
-            logger.info('Auto-detected script: %s', ocr_lang,
-                        extra={'task_id': task_id})
+            # MinerU has built-in YOLOv11 language detection model.
+            # Pass 'auto' directly — it samples pages, detects text blocks,
+            # classifies script from the image. Works on scanned PDFs.
+            ocr_lang = 'auto'
         elif ',' in ocr_lang_raw:
             # Multi-lang: use the first non-English lang as primary
             # (most PaddleOCR models include Latin chars in their charset)
@@ -2838,7 +2839,7 @@ class MineruHandler(BaseHTTPRequestHandler):
             'figure_display': fields.get('figure_display', 'image'),
             'ocr_mode': ocr_mode,
             'table_mode': table_mode,
-            'ocr_lang': fields.get('ocr_lang', 'en'),
+            'ocr_lang': fields.get('ocr_lang', 'auto'),
         }
 
         # Create task and start processing
