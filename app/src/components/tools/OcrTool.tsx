@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
 import type { ExportFormat, ProcessingMode } from "@/types";
@@ -73,7 +73,37 @@ export default function OcrTool() {
       : null) ?? "cloud"
   );
   const [cloudAvailable, setCloudAvailable] = useState(true);
+  const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
+
+  // Fetch mode availability from server health endpoint
+  useEffect(() => {
+    async function checkModes() {
+      try {
+        const res = await fetch("/api/health");
+        if (res.ok) {
+          const data = await res.json();
+          setCloudAvailable(data.cloud_available ?? true);
+          setLocalAvailable(data.local_available ?? true);
+          // Auto-switch to cloud if local isn't available
+          if (!data.local_available && processingMode === "local") {
+            if (data.cloud_available) {
+              setProcessingMode("cloud");
+              localStorage.setItem("processing_mode", "cloud");
+            }
+          }
+          // Auto-switch to local tables if cloud isn't available
+          if (!data.cloud_available && tableMode === "cloud") {
+            setTableMode("local");
+            localStorage.setItem("table_mode", "local");
+          }
+        }
+      } catch {
+        // Server not reachable — keep defaults
+      }
+    }
+    checkModes();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
   const [completedCount, setCompletedCount] = useState(0);
@@ -413,12 +443,13 @@ export default function OcrTool() {
           </h4>
 
           {/* Local Processing */}
-          <label className="mb-3 flex cursor-pointer items-start gap-3">
+          <label className={`mb-3 flex cursor-pointer items-start gap-3 ${!localAvailable ? "opacity-50" : ""}`}>
             <input
               type="radio"
               name="processing_mode"
               value="local"
               checked={processingMode === "local"}
+              disabled={!localAvailable}
               onChange={() => {
                 setProcessingMode("local");
                 localStorage.setItem("processing_mode", "local");
@@ -478,6 +509,11 @@ export default function OcrTool() {
           {!cloudAvailable && (
             <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
               Cloud processing is unavailable. Check your internet connection.
+            </p>
+          )}
+          {!localAvailable && (
+            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+              Local processing is not available on this installation. Using cloud processing.
             </p>
           )}
 

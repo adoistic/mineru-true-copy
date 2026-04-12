@@ -1,16 +1,18 @@
-import { checkHealth, getMineruStatus } from '@/lib/mineru/client';
+import { checkHealth, getMineruStatus, getLastHealth } from '@/lib/mineru/client';
 
 export async function GET() {
   try {
-    const [health, mineruStatus] = await Promise.all([
-      checkHealth(),
-      getMineruStatus(),
-    ]);
+    const healthy = await checkHealth();
+    const mineruStatus = getMineruStatus();
+    const lastHealth = getLastHealth();
 
     return Response.json({
-      status: 'ok',
-      app: health,
+      status: healthy ? 'ok' : 'degraded',
+      app: healthy,
       processing_engine: mineruStatus,
+      cloud_available: lastHealth?.cloud_available ?? false,
+      local_available: lastHealth?.local_available ?? false,
+      modes: lastHealth?.modes ?? [],
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
@@ -18,6 +20,8 @@ export async function GET() {
       {
         status: 'error',
         message: error instanceof Error ? error.message : 'Health check failed',
+        cloud_available: false,
+        local_available: false,
       },
       { status: 503 }
     );

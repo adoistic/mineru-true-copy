@@ -18,6 +18,15 @@ export function getMineruStatus(): MineruStatus {
   return mineruStatus;
 }
 
+export interface HealthStatus {
+  status: string;
+  cloud_available: boolean;
+  local_available: boolean;
+  modes: string[];
+}
+
+let _lastHealth: HealthStatus | null = null;
+
 export async function checkHealth(): Promise<boolean> {
   try {
     const response = await fetch(`${getMineruUrl()}/health`, {
@@ -25,12 +34,17 @@ export async function checkHealth(): Promise<boolean> {
     });
     if (response.ok) {
       mineruStatus = 'running';
+      _lastHealth = await response.json();
       return true;
     }
     return false;
   } catch {
     return false;
   }
+}
+
+export function getLastHealth(): HealthStatus | null {
+  return _lastHealth;
 }
 
 export async function waitForReady(timeoutMs = STARTUP_TIMEOUT_MS): Promise<boolean> {
