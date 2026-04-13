@@ -15,6 +15,8 @@
 import { MineruOutput, MineruPage, MineruRegion } from '@/types';
 import { getPageImage, getMineruUrl } from '@/lib/mineru/client';
 import { sanitizeTableHtml, sanitizeFormattedText, escapeHtml } from '@/lib/mineru/html-converter';
+import { detectScript, isIndicScript, getAllScripts, getNotoFamilyName, type Script } from './font-resolver';
+import { fetchBundledFontBase64 } from './font-loader';
 import fs from 'fs';
 import path from 'path';
 
@@ -60,6 +62,23 @@ export async function createTrueCopyHtml(
   if (mineruOutput.used_fonts && Object.keys(mineruOutput.used_fonts).length > 0) {
     fontFaceCss = await buildFontFaceRules(mineruOutput.used_fonts);
   }
+
+  // Add @font-face rules for bundled Noto Sans fonts (Indic scripts)
+  // Scan document text to determine which scripts are present
+  const scriptsNeeded = new Set<Script>();
+  for (const page of pages) {
+    for (const region of page.regions) {
+      const text = (region.content_per_page ?? region.content ?? '').replace(/<[^>]*>/g, '');
+      if (text.trim()) {
+        const script = detectScript(text);
+        if (script !== 'latin') scriptsNeeded.add(script);
+      }
+    }
+  }
+  // Always include Noto Sans Latin as the base fallback
+  scriptsNeeded.add('latin' as Script);
+  const notoFontFaceCss = await buildNotoFontFaceRules(scriptsNeeded);
+  fontFaceCss = fontFaceCss + '\n' + notoFontFaceCss;
 
   return buildDocument(title, pageHtmlParts.join('\n'), fontFaceCss);
 }
@@ -110,8 +129,19 @@ function renderRegion(region: MineruRegion): string {
   const effectiveEquations = region.inline_equations_per_page ?? region.inline_equations;
 
   // Position the box at exact bbox coordinates — font size will be set dynamically by JS
-  const fontFamily = region.font_family ?? 'Inter';
-  const quotedFamily = `'${fontFamily}', 'Inter', sans-serif`;
+  // Build a script-aware font-family stack
+  const textForScript = (effectiveContent || '').replace(/<[^>]*>/g, '');
+  const textScript = detectScript(textForScript);
+  const docFontFamily = region.font_family ?? 'Inter';
+  let quotedFamily: string;
+  if (isIndicScript(textScript)) {
+    // Indic text: script-specific Noto → Noto Sans → document font → Inter → sans-serif
+    const notoFamily = getNotoFamilyName(textScript);
+    quotedFamily = `'${notoFamily}', 'Noto Sans', '${docFontFamily}', 'Inter', sans-serif`;
+  } else {
+    // Latin text: document font → Noto Sans → Inter → sans-serif
+    quotedFamily = `'${docFontFamily}', 'Noto Sans', 'Inter', sans-serif`;
+  }
   const style = `left:${x1}px;top:${y1}px;width:${regionWidth}px;height:${regionHeight}px;font-family:${quotedFamily}`;
 
   let content: string;
@@ -212,6 +242,31 @@ async function buildFontFaceRules(usedFonts: Record<string, string>): Promise<st
 }`);
     } catch {
       // Skip — region falls back to Inter
+    }
+  }
+  return rules.join('\n');
+}
+
+/**
+ * Build @font-face rules for bundled Noto Sans fonts.
+ * Embeds font data as base64 data URLs for self-contained HTML.
+ */
+async function buildNotoFontFaceRules(scripts: Set<Script>): Promise<string> {
+  const rules: string[] = [];
+  for (const script of scripts) {
+    try {
+      const dataUrl = await fetchBundledFontBase64(script);
+      if (!dataUrl) continue;
+      const family = getNotoFamilyName(script);
+      rules.push(`@font-face {
+  font-family: "${family}";
+  font-weight: 100 900;
+  font-style: normal;
+  src: url(${dataUrl}) format("truetype");
+  font-display: block;
+}`);
+    } catch {
+      // Skip — region falls back to next font in stack
     }
   }
   return rules.join('\n');

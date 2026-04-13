@@ -10,9 +10,10 @@ import fontkit from '@pdf-lib/fontkit';
 import { MineruOutput, MineruRegion } from '@/types';
 import { detectSourcePage } from './page-size';
 import { fitTextToBox, clearPositioningCache } from './positioning-core';
-import { fetchTtf, clearFontCache } from './font-loader';
+import { fetchTtf, fetchBundledTtf, clearFontCache } from './font-loader';
 import { getPageImage } from '@/lib/mineru/client';
 import { parseHtmlToRuns, runsToPlainText, parseTableHtml, StyledRun, TableData } from './html-content-parser';
+import { detectScript, isIndicScript, type Script, getAllScripts } from './font-resolver';
 
 const FONT_SIZE_MIN = 1;
 const FONT_SIZE_MAX = 200;
@@ -23,6 +24,9 @@ interface FontSet {
   bold: PDFFont;
   custom: Map<string, PDFFont>;
   ttfDataMap: Map<string, ArrayBuffer>;
+  /** Bundled Noto Sans fonts keyed by Script name */
+  noto: Map<Script, PDFFont>;
+  notoTtfData: Map<Script, ArrayBuffer>;
 }
 
 export async function createTrueCopyPdf(
@@ -58,7 +62,37 @@ export async function createTrueCopyPdf(
   const fallbackRegular = await doc.embedFont(StandardFonts.Helvetica);
   const fallbackBold = await doc.embedFont(StandardFonts.HelveticaBold);
 
-  const fonts: FontSet = { regular: fallbackRegular, bold: fallbackBold, custom: customFonts, ttfDataMap };
+  // Pre-load bundled Noto Sans fonts for Indic scripts on demand.
+  // We scan all page text to determine which scripts are present,
+  // then embed only the needed Noto fonts.
+  const notoFonts = new Map<Script, PDFFont>();
+  const notoTtfData = new Map<Script, ArrayBuffer>();
+  const scriptsNeeded = new Set<Script>();
+  for (const page of mineruOutput.pages) {
+    for (const region of page.regions) {
+      const text = (region.content_per_page ?? region.content ?? '').replace(/<[^>]*>/g, '');
+      if (text.trim()) {
+        const script = detectScript(text);
+        if (script !== 'latin') scriptsNeeded.add(script);
+      }
+    }
+  }
+  // Always load Noto Sans Latin as a safe non-Latin fallback stack base
+  scriptsNeeded.add('latin' as Script);
+  for (const script of scriptsNeeded) {
+    try {
+      const ttfData = await fetchBundledTtf(script);
+      if (ttfData) {
+        const font = await doc.embedFont(new Uint8Array(ttfData), { subset: false });
+        notoFonts.set(script, font);
+        notoTtfData.set(script, ttfData);
+      }
+    } catch (err) {
+      console.warn(`[TrueCopyPDF] Failed to embed Noto Sans for ${script}:`, err);
+    }
+  }
+
+  const fonts: FontSet = { regular: fallbackRegular, bold: fallbackBold, custom: customFonts, ttfDataMap, noto: notoFonts, notoTtfData };
 
   for (let i = 0; i < mineruOutput.pages.length; i++) {
     const mineruPage = mineruOutput.pages[i];
@@ -125,11 +159,30 @@ async function drawTextRegion(
   const plainText = runsToPlainText(runs);
   if (!plainText.trim()) return;
 
-  // Get fonts
+  // Get fonts — script-aware selection
+  const textScript = detectScript(plainText);
   const customFont = region.font_family ? fonts.custom.get(region.font_family) : undefined;
-  const regularFont = customFont || fonts.regular;
-  const boldFont = fonts.bold;
-  const ttfData = region.font_family ? fonts.ttfDataMap.get(region.font_family) : undefined;
+  let regularFont: PDFFont;
+  let boldFont: PDFFont;
+  let ttfData: ArrayBuffer | undefined;
+
+  if (customFont && !isIndicScript(textScript)) {
+    // Document font works for Latin text
+    regularFont = customFont;
+    boldFont = fonts.bold;
+    ttfData = region.font_family ? fonts.ttfDataMap.get(region.font_family) : undefined;
+  } else if (isIndicScript(textScript)) {
+    // Indic text: use Noto Sans for the detected script
+    const notoFont = fonts.noto.get(textScript);
+    regularFont = notoFont || fonts.noto.get('latin' as Script) || fonts.regular;
+    boldFont = regularFont; // Noto variable fonts include bold weight
+    ttfData = fonts.notoTtfData.get(textScript);
+  } else {
+    // Latin text without document font: try Noto Sans Latin, then Helvetica
+    regularFont = fonts.noto.get('latin' as Script) || customFont || fonts.regular;
+    boldFont = fonts.bold;
+    ttfData = fonts.notoTtfData.get('latin' as Script);
+  }
 
   // Compute font size
   const fontFamily = region.font_family
@@ -407,8 +460,14 @@ async function drawTableRegion(
       // Draw cell text with formatting
       if (cell.text.trim()) {
         const cellFontSize = cell.isHeader ? Math.min(fontSize * 1.05, 24) : fontSize;
-        // Always use Helvetica/HelveticaBold for tables — custom fonts often can't encode table text
-        const cellFont = cell.isHeader ? fonts.bold : fonts.regular;
+        // Script-aware font for table cells — Indic text needs Noto, not Helvetica
+        const cellScript = detectScript(cell.text);
+        let cellFont: PDFFont;
+        if (isIndicScript(cellScript) && fonts.noto.has(cellScript)) {
+          cellFont = fonts.noto.get(cellScript)!;
+        } else {
+          cellFont = cell.isHeader ? fonts.bold : fonts.regular;
+        }
 
         const lines = wrapTextForPdf(cell.text, cellFont, cellFontSize, cw - padding * 2);
         console.log(`[TrueCopyPDF] Cell: "${cell.text.slice(0,20)}" fs=${cellFontSize.toFixed(2)} cw=${cw.toFixed(1)} lines=${lines.length} textY=${(pageHeight - currentY - padding - cellFontSize).toFixed(1)} cellBot=${pdfCellY.toFixed(1)}`);

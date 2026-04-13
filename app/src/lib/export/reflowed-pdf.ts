@@ -17,7 +17,8 @@ import { PDFDocument, PDFFont, PDFPage, StandardFonts, rgb } from 'pdf-lib';
 import fontkit from '@pdf-lib/fontkit';
 import { MineruOutput, MineruRegion } from '@/types';
 import { detectSourcePage, computeReflowedDimensions } from './page-size';
-import { fetchTtf, clearFontCache } from './font-loader';
+import { fetchTtf, fetchBundledTtf, clearFontCache } from './font-loader';
+import { detectScript, isIndicScript, type Script } from './font-resolver';
 
 const MARGIN_PT = 72; // 1 inch
 const LINE_HEIGHT_RATIO = 1.4;
@@ -76,6 +77,30 @@ export async function createReflowedPdf(
     boldFont = await doc.embedFont(StandardFonts.HelveticaBold);
   }
 
+  // Pre-load bundled Noto Sans fonts for Indic scripts found in the document
+  const notoFonts = new Map<Script, PDFFont>();
+  const scriptsNeeded = new Set<Script>();
+  for (const page of mineruOutput.pages) {
+    for (const region of page.regions) {
+      const text = (region.content || '').replace(/<[^>]*>/g, '').trim();
+      if (text) {
+        const script = detectScript(text);
+        if (script !== 'latin') scriptsNeeded.add(script);
+      }
+    }
+  }
+  for (const script of scriptsNeeded) {
+    try {
+      const ttfData = await fetchBundledTtf(script);
+      if (ttfData) {
+        const font = await doc.embedFont(new Uint8Array(ttfData), { subset: false });
+        notoFonts.set(script, font);
+      }
+    } catch (err) {
+      console.warn(`[ReflowedPDF] Failed to embed Noto Sans for ${script}:`, err);
+    }
+  }
+
   const fontSize = 11;
 
   // Use first page dimensions for all pages (reflowed doesn't need per-page sizing)
@@ -89,7 +114,7 @@ export async function createReflowedPdf(
     for (const region of mineruPage.regions) {
       if (options?.removeHeadersFooters && (region.type === 'header' || region.type === 'footer')) continue;
 
-      state = await drawReflowedRegion(doc, state, region, bodyFont, boldFont, fontSize, dims.pdf.width_pt, dims.pdf.height_pt);
+      state = await drawReflowedRegion(doc, state, region, bodyFont, boldFont, fontSize, dims.pdf.width_pt, dims.pdf.height_pt, notoFonts);
     }
   }
 
@@ -138,9 +163,19 @@ async function drawReflowedRegion(
   baseFontSize: number,
   pageWidth: number,
   pageHeight: number,
+  notoFonts: Map<Script, PDFFont>,
 ): Promise<LayoutState> {
   const text = stripHtmlAndPlaceholders(region.content || '');
   if (!text && region.type !== 'figure' && region.type !== 'formula') return state;
+
+  // Script-aware font selection: use Noto for Indic text
+  const regionScript = detectScript(text);
+  let effectiveBodyFont = bodyFont;
+  let effectiveBoldFont = boldFont;
+  if (isIndicScript(regionScript) && notoFonts.has(regionScript)) {
+    effectiveBodyFont = notoFonts.get(regionScript)!;
+    effectiveBoldFont = effectiveBodyFont; // Noto variable fonts include bold
+  }
 
   // Draw inline/interline equation images before text
   const equations = region.inline_equations || [];
@@ -189,7 +224,7 @@ async function drawReflowedRegion(
       const level = region.level || 1;
       const headingSize = HEADING_SIZES[level] || baseFontSize;
       const lineH = headingSize * LINE_HEIGHT_RATIO;
-      const lines = wrapText(text, boldFont, headingSize, state.contentWidth);
+      const lines = wrapText(text, effectiveBoldFont, headingSize, state.contentWidth);
       const totalHeight = lines.length * lineH + HEADING_SPACING_BEFORE + HEADING_SPACING_AFTER;
 
       state = ensureSpace(doc, state, totalHeight, pageWidth, pageHeight);
@@ -202,7 +237,7 @@ async function drawReflowedRegion(
             x: state.leftMargin,
             y: state.cursorY,
             size: headingSize,
-            font: boldFont,
+            font: effectiveBoldFont,
             color: rgb(0, 0, 0),
           });
         } catch { /* skip unsupported chars */ }
@@ -218,7 +253,7 @@ async function drawReflowedRegion(
       const paragraphs = text.split('\n').filter(p => p.trim());
 
       for (const para of paragraphs) {
-        const lines = wrapText(para, bodyFont, size, state.contentWidth);
+        const lines = wrapText(para, effectiveBodyFont, size, state.contentWidth);
         const totalHeight = lines.length * lineH + PARAGRAPH_SPACING;
         state = ensureSpace(doc, state, totalHeight, pageWidth, pageHeight);
 
@@ -229,7 +264,7 @@ async function drawReflowedRegion(
               x: state.leftMargin,
               y: state.cursorY,
               size,
-              font: bodyFont,
+              font: effectiveBodyFont,
               color: rgb(0, 0, 0),
             });
           } catch { /* skip unsupported chars */ }
@@ -248,7 +283,7 @@ async function drawReflowedRegion(
         // Supports English (a-z), Devanagari consonants (U+0905-U+0939), digits (0-9, ०-९), roman numerals
         const cleanItem = item.replace(/^\s*(?:[\u2022\u25E6\u25AA\u25B8\-\u2013\u2014*]\s*|[\d\u0966-\u096F]+[.)\]]\s*|\([\d\u0966-\u096F]+\)\s*|\([a-z\u0905-\u0939]\)\s*|[a-z\u0905-\u0939][.)]\s*)/i, '').trim();
         const bulletText = `\u2022  ${cleanItem || item.trim()}`;
-        const lines = wrapText(bulletText, bodyFont, baseFontSize, state.contentWidth - 20);
+        const lines = wrapText(bulletText, effectiveBodyFont, baseFontSize, state.contentWidth - 20);
         const totalHeight = lines.length * lineH + 4;
         state = ensureSpace(doc, state, totalHeight, pageWidth, pageHeight);
 
@@ -259,7 +294,7 @@ async function drawReflowedRegion(
               x: state.leftMargin + (li === 0 ? 0 : 20),
               y: state.cursorY,
               size: baseFontSize,
-              font: bodyFont,
+              font: effectiveBodyFont,
               color: rgb(0, 0, 0),
             });
           } catch { /* skip */ }
@@ -314,7 +349,7 @@ async function drawReflowedRegion(
       const tableText = (region.table_html || text).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
       if (!tableText) return state;
 
-      const lines = wrapText(tableText, bodyFont, baseFontSize - 1, state.contentWidth);
+      const lines = wrapText(tableText, effectiveBodyFont, baseFontSize - 1, state.contentWidth);
       const totalHeight = lines.length * lineH + PARAGRAPH_SPACING;
       state = ensureSpace(doc, state, totalHeight, pageWidth, pageHeight);
 
@@ -325,7 +360,7 @@ async function drawReflowedRegion(
             x: state.leftMargin,
             y: state.cursorY,
             size: baseFontSize - 1,
-            font: bodyFont,
+            font: effectiveBodyFont,
             color: rgb(0.2, 0.2, 0.2),
           });
         } catch { /* skip */ }
