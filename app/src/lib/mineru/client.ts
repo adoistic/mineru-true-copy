@@ -164,32 +164,65 @@ export async function getTaskResult(taskId: string): Promise<{
   };
 }
 
-export async function pollForCompletion(
-  taskId: string,
-  onProgress?: (pagesCompleted: number) => void,
+/**
+ * Generic polling loop — reusable for OCR (MinerU) and translation tasks.
+ * Calls `pollFn` every `intervalMs` until it returns `{ done: true }` or
+ * throws on failure / timeout.
+ */
+export async function pollTask<T>(opts: {
+  pollFn: () => Promise<{ done: boolean; result?: T; failed?: boolean; error?: string; progress?: number }>;
+  onProgress?: (progress: number) => void;
+  intervalMs?: number;
+  timeoutMs?: number;
+  label?: string;
+}): Promise<T> {
+  const { pollFn, onProgress, intervalMs = 2000, label = 'Task' } = opts;
   // Default deadline is generous so batch jobs waiting behind hundreds of
-  // others on the MinerU semaphore don't time out. The Next.js queue enforces
-  // its own local concurrency cap; this timeout is the absolute ceiling.
-  timeoutMs = 24 * 60 * 60 * 1000 // 24 hours
-): Promise<MineruOutput> {
+  // others on a semaphore don't time out.
+  const timeoutMs = opts.timeoutMs ?? 24 * 60 * 60 * 1000; // 24 hours
   const start = Date.now();
 
   while (Date.now() - start < timeoutMs) {
-    const result = await getTaskResult(taskId);
+    const poll = await pollFn();
 
-    if (result.status === 'completed' && result.result) {
-      return result.result;
+    if (poll.done && poll.result !== undefined) {
+      return poll.result;
     }
 
-    if (result.status === 'failed') {
-      throw new Error(`MinerU processing failed: ${result.error || 'Unknown error'}`);
+    if (poll.failed) {
+      throw new Error(`${label} failed: ${poll.error || 'Unknown error'}`);
     }
 
-    // Brief delay between polls
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    if (poll.progress !== undefined && onProgress) {
+      onProgress(poll.progress);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
   }
 
-  throw new Error('MinerU processing timed out');
+  throw new Error(`${label} timed out`);
+}
+
+export async function pollForCompletion(
+  taskId: string,
+  onProgress?: (pagesCompleted: number) => void,
+  timeoutMs = 24 * 60 * 60 * 1000
+): Promise<MineruOutput> {
+  return pollTask<MineruOutput>({
+    pollFn: async () => {
+      const result = await getTaskResult(taskId);
+      if (result.status === 'completed' && result.result) {
+        return { done: true, result: result.result };
+      }
+      if (result.status === 'failed') {
+        return { done: false, failed: true, error: result.error };
+      }
+      return { done: false };
+    },
+    onProgress,
+    timeoutMs,
+    label: 'MinerU processing',
+  });
 }
 
 /**
@@ -307,6 +340,163 @@ function mapBlockType(type: string): MineruOutput['pages'][0]['regions'][0]['typ
     'image_body': 'figure',
   };
   return typeMap[type] || 'text';
+}
+
+// ---------------------------------------------------------------------------
+// Translation server client
+// ---------------------------------------------------------------------------
+
+const TRANSLATION_SERVER_URL = process.env.TRANSLATION_API_URL || 'http://localhost:51823';
+
+export function getTranslationServerUrl(): string {
+  return TRANSLATION_SERVER_URL;
+}
+
+export async function checkTranslationHealth(): Promise<boolean> {
+  try {
+    const response = await fetch(`${TRANSLATION_SERVER_URL}/health`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+export async function submitTranslation(
+  jsonData: Record<string, unknown>,
+  srcLang: string,
+  tgtLang: string,
+  modelVariant: string = '1B',
+): Promise<{ translated_json: Record<string, unknown>; duration_ms: number }> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      json_data: jsonData,
+      src_lang: srcLang,
+      tgt_lang: tgtLang,
+      model_variant: modelVariant,
+    }),
+    signal: AbortSignal.timeout(600000), // 10 min for large docs
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(data.error || `Translation failed: ${response.status}`);
+  }
+
+  return response.json();
+}
+
+export async function submitTranslationBatch(
+  items: Array<{ json_path: string; tgt_langs: string[] }>,
+  srcLang: string,
+  modelVariant: string,
+  outputDir: string,
+): Promise<string> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate/batch`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      items,
+      src_lang: srcLang,
+      model_variant: modelVariant,
+      output_dir: outputDir,
+    }),
+    signal: AbortSignal.timeout(30000),
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(data.error || `Batch submission failed: ${response.status}`);
+  }
+
+  const data = await response.json();
+  return data.task_id;
+}
+
+export async function getTranslationStatus(taskId: string): Promise<{
+  task_id: string;
+  status: 'processing' | 'completed' | 'failed';
+  progress: { completed: number; total: number; current_file: string | null; current_lang: string | null };
+  error?: string;
+}> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate/status/${taskId}`, {
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    throw new Error(`Translation status query failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getTranslationModels(): Promise<{
+  available: boolean;
+  supported_languages: Record<string, string>;
+  directions: string[];
+  variants: string[];
+  loaded: { direction: string; variant: string } | null;
+}> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate/models`, {
+    signal: AbortSignal.timeout(5000),
+  });
+  if (!response.ok) {
+    throw new Error(`Translation models query failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function loadTranslationModel(direction: string, variant: string): Promise<void> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate/model/load`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ direction, variant }),
+    signal: AbortSignal.timeout(300000), // model load can take a while
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ error: 'Unknown error' }));
+    throw new Error(data.error || `Model load failed: ${response.status}`);
+  }
+}
+
+export async function unloadTranslationModel(): Promise<void> {
+  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate/model/unload`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(10000),
+  });
+  if (!response.ok) {
+    throw new Error(`Model unload failed: ${response.status}`);
+  }
+}
+
+export async function pollTranslationCompletion(
+  taskId: string,
+  onProgress?: (completed: number, total: number, currentLang: string | null) => void,
+  timeoutMs = 24 * 60 * 60 * 1000,
+): Promise<void> {
+  await pollTask<true>({
+    pollFn: async () => {
+      const status = await getTranslationStatus(taskId);
+      if (status.status === 'completed') {
+        return { done: true, result: true as const };
+      }
+      if (status.status === 'failed') {
+        return { done: false, failed: true, error: status.error };
+      }
+      if (onProgress) {
+        onProgress(
+          status.progress.completed,
+          status.progress.total,
+          status.progress.current_lang,
+        );
+      }
+      return { done: false, progress: status.progress.completed };
+    },
+    timeoutMs,
+    label: 'Translation',
+  });
 }
 
 function extractContent(block: Record<string, unknown>): string {

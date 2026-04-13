@@ -170,3 +170,68 @@ export interface WhiteLabelConfig {
   app_name?: string;
   mode?: 'light' | 'dark';
 }
+
+// ---------------------------------------------------------------------------
+// Translation types
+// ---------------------------------------------------------------------------
+
+export type ModelVariant = '1B' | '200M';
+export type TranslationDirection = 'en-indic' | 'indic-en' | 'indic-indic';
+export type ConfidenceLevel = 'high' | 'medium' | 'low';
+export type TranslationViewMode = 'side-by-side' | 'translated-only' | 'diff';
+
+export interface TranslationConfig {
+  src_lang: string;
+  tgt_langs: string[];
+  model_variant: ModelVariant;
+  output_folder: string;
+}
+
+export interface TranslationStatusResponse {
+  task_id: string;
+  status: 'processing' | 'completed' | 'failed';
+  progress: {
+    completed: number;
+    total: number;
+    current_file: string | null;
+    current_lang: string | null;
+  };
+  error?: string;
+}
+
+export interface TranslationResult {
+  translated_json: Record<string, unknown>;
+  src_lang: string;
+  tgt_lang: string;
+  duration_ms: number;
+}
+
+export interface TranslationModelInfo {
+  available: boolean;
+  supported_languages: Record<string, string>;
+  directions: TranslationDirection[];
+  variants: string[];
+  loaded: {
+    direction: string;
+    variant: string;
+  } | null;
+}
+
+export interface Language {
+  code: string;
+  label: string;
+  script: string;
+  disabled?: boolean;
+  disabledReason?: string;
+}
+
+export interface LanguageGroup {
+  name: string;
+  languages: Language[];
+}
+
+export interface TranslatedParagraph {
+  original: string;
+  translated: string;
+  confidence: ConfidenceLevel;
+}

@@ -58,7 +58,6 @@ const TOOLS: ToolDef[] = [
   {
     id: "translation",
     label: "Translate",
-    badge: "Soon",
     icon: (
       <svg
         className="h-5 w-5"
