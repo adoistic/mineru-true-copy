@@ -38,7 +38,7 @@ const TOOLS: ToolDef[] = [
   },
   {
     id: "extraction",
-    label: "Data Extraction",
+    label: "Extract",
     icon: (
       <svg
         className="h-5 w-5"
@@ -57,8 +57,8 @@ const TOOLS: ToolDef[] = [
   },
   {
     id: "translation",
-    label: "Translation",
-    badge: "Coming Soon",
+    label: "Translate",
+    badge: "Soon",
     icon: (
       <svg
         className="h-5 w-5"
@@ -149,8 +149,8 @@ export default function Home() {
 
   if (loading) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-slate-300 border-t-blue-600" />
+      <div className="flex min-h-screen items-center justify-center" style={{ background: 'var(--bg-app)' }}>
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#333] border-t-accent" />
       </div>
     );
   }
@@ -161,32 +161,43 @@ export default function Home() {
 
   const statusDotColor =
     mineruStatus === "green"
-      ? "bg-green-500"
+      ? "bg-ok"
       : mineruStatus === "yellow"
-        ? "bg-amber-500"
-        : "bg-red-500";
+        ? "bg-warn"
+        : "bg-err";
 
   return (
-    <div className="flex h-screen flex-col bg-slate-100 dark:bg-slate-950">
-      {/* Top bar */}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
+    <div className="flex h-screen flex-col" style={{ background: 'var(--bg-app)' }}>
+      {/* Header — h-10, bg-surface, border-b */}
+      <header
+        className="flex h-10 shrink-0 items-center justify-between border-b px-4"
+        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+      >
         <div className="flex items-center gap-2">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-600 text-xs font-bold text-white">
+          <div
+            className="flex h-6 w-6 items-center justify-center rounded text-[10px] font-bold"
+            style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+          >
             DT
           </div>
-          <h1 className="text-base font-semibold text-slate-900 dark:text-white">
+          <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
             DocTransform
-          </h1>
+          </span>
         </div>
 
-        <div className="flex items-center gap-4">
-          <div className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 dark:bg-slate-800">
+        <div className="flex items-center gap-3">
+          {/* Credits badge */}
+          <div
+            className="flex items-center gap-1.5 rounded px-2 py-1"
+            style={{ background: 'var(--bg-elevated)' }}
+          >
             <svg
-              className="h-4 w-4 text-blue-600 dark:text-blue-400"
+              className="h-3.5 w-3.5"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              style={{ color: 'var(--text-secondary)' }}
             >
               <path
                 strokeLinecap="round"
@@ -194,18 +205,22 @@ export default function Home() {
                 d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
               />
             </svg>
-            <span className="text-sm font-medium text-slate-700 dark:text-slate-300">
-              {creditBalance.toLocaleString()} credits
+            <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+              {creditBalance.toLocaleString()}
             </span>
           </div>
 
+          {/* Settings gear */}
           <button
             onClick={() => setSettingsOpen(true)}
-            className="rounded-lg p-2 text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded p-1 transition-colors"
+            style={{ color: 'var(--text-secondary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
             aria-label="Settings"
           >
             <svg
-              className="h-5 w-5"
+              className="h-4 w-4"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
@@ -227,33 +242,46 @@ export default function Home() {
       </header>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar */}
-        <aside className="flex w-56 shrink-0 flex-col border-r border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900">
-          <nav className="flex-1 space-y-1 p-3">
-            {TOOLS.map((tool) => (
+        {/* Sidebar — w-16 icon rail */}
+        <aside
+          className="flex w-16 shrink-0 flex-col items-center border-r py-3 gap-1"
+          style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+        >
+          {TOOLS.map((tool) => {
+            const isActive = activeTool === tool.id;
+            return (
               <button
                 key={tool.id}
                 onClick={() => setActiveTool(tool.id)}
-                className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors ${
-                  activeTool === tool.id
-                    ? "bg-blue-50 text-blue-700 dark:bg-blue-950/40 dark:text-blue-400"
-                    : "text-slate-600 hover:bg-slate-50 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-slate-200"
-                }`}
+                className="relative flex w-12 flex-col items-center gap-0.5 rounded py-2 transition-colors"
+                style={{
+                  background: isActive ? 'var(--accent-muted)' : 'transparent',
+                  color: isActive ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+                onMouseEnter={(e) => {
+                  if (!isActive) e.currentTarget.style.background = 'var(--bg-elevated)';
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.background = 'transparent';
+                }}
               >
                 {tool.icon}
-                <span className="flex-1">{tool.label}</span>
+                <span className="text-[10px] font-medium leading-tight">{tool.label}</span>
                 {tool.badge && (
-                  <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">
+                  <span
+                    className="absolute -top-0.5 -right-0.5 rounded-full px-1 text-[8px] font-medium"
+                    style={{ background: 'var(--warning-muted)', color: 'var(--warning)' }}
+                  >
                     {tool.badge}
                   </span>
                 )}
               </button>
-            ))}
-          </nav>
+            );
+          })}
         </aside>
 
-        {/* Center content */}
-        <main className="flex-1 overflow-y-auto p-6">
+        {/* Center content — flex-1, darkest bg */}
+        <main className="flex-1 overflow-y-auto p-6" style={{ background: 'var(--bg-app)' }}>
           <div className="mx-auto max-w-2xl">
             {activeTool === "ocr" && <OcrTool />}
             {activeTool === "extraction" && <ExtractionTool />}
@@ -262,14 +290,14 @@ export default function Home() {
         </main>
       </div>
 
-      {/* Status bar */}
-      <footer className="flex h-8 shrink-0 items-center justify-between border-t border-slate-200 bg-white px-4 dark:border-slate-800 dark:bg-slate-900">
+      {/* Status bar — h-6, bg-surface, border-t */}
+      <footer
+        className="flex h-6 shrink-0 items-center justify-between border-t px-4"
+        style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
+      >
         <div className="flex items-center gap-2">
-          <span
-            className={`inline-block h-2 w-2 rounded-full ${statusDotColor}`}
-          />
-          <span className="text-xs text-slate-500 dark:text-slate-400">
-            Processing Engine{" "}
+          <span className={`inline-block h-2 w-2 rounded-full ${statusDotColor}`} />
+          <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             {mineruStatus === "green"
               ? "Ready"
               : mineruStatus === "yellow"
@@ -277,10 +305,15 @@ export default function Home() {
                 : "Offline"}
           </span>
         </div>
-        <div className="text-xs text-slate-400 dark:text-slate-500">
-          {activeJobs > 0
-            ? `${activeJobs} active job${activeJobs !== 1 ? "s" : ""}`
-            : "No active jobs"}
+        <div className="flex items-center gap-4">
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            {activeJobs > 0
+              ? `${activeJobs} job${activeJobs !== 1 ? "s" : ""}`
+              : "No jobs"}
+          </span>
+          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            v1.0.0
+          </span>
         </div>
       </footer>
 

@@ -82,16 +82,25 @@ export default function ActivationScreen({
   );
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 dark:bg-slate-950">
-      <div className="w-full max-w-md rounded-xl bg-white p-8 shadow-lg dark:bg-slate-900">
+    <div
+      className="flex min-h-screen items-center justify-center"
+      style={{ background: 'var(--bg-app)' }}
+    >
+      <div
+        className="w-full max-w-md rounded-md p-8"
+        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+      >
         <div className="mb-8 text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-blue-600 text-2xl font-bold text-white">
+          <div
+            className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-md text-xl font-bold"
+            style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+          >
             DT
           </div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">
+          <h1 className="text-[20px] font-semibold" style={{ color: 'var(--text-primary)' }}>
             DocTransform
           </h1>
-          <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-[13px]" style={{ color: 'var(--text-secondary)' }}>
             Enter your activation key to get started
           </p>
         </div>
@@ -100,7 +109,8 @@ export default function ActivationScreen({
           <div>
             <label
               htmlFor="activation-key"
-              className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300"
+              className="mb-1.5 block text-[11px] font-medium uppercase tracking-[0.05em]"
+              style={{ color: 'var(--text-secondary)' }}
             >
               Activation Key
             </label>
@@ -112,13 +122,23 @@ export default function ActivationScreen({
               onKeyDown={handleKeyDown}
               placeholder="XXXX-XXXX-XXXX-XXXX"
               maxLength={19}
-              className="w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-center font-mono text-lg tracking-widest text-slate-900 placeholder:text-slate-300 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-600"
+              className="w-full rounded-sm px-4 py-2.5 text-center font-mono text-[16px] tracking-widest outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--border-focus)'; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
               disabled={loading}
             />
           </div>
 
           {error && (
-            <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+            <p
+              className="rounded p-3 text-[13px]"
+              style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+            >
               {error}
             </p>
           )}
@@ -126,7 +146,14 @@ export default function ActivationScreen({
           <button
             onClick={handleActivate}
             disabled={loading || rawInput.replace(/-/g, "").length !== 16}
-            className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500/20 disabled:cursor-not-allowed disabled:opacity-50"
+            className="w-full rounded py-2.5 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+            style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+            onMouseEnter={(e) => {
+              if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--accent-hover)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = 'var(--accent)';
+            }}
           >
             {loading ? "Activating..." : "Activate"}
           </button>

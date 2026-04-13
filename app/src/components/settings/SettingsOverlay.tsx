@@ -65,17 +65,23 @@ export default function SettingsOverlay({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div
-        className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative z-10 w-full max-w-lg rounded-xl bg-white p-6 shadow-2xl dark:bg-slate-900">
+      <div
+        className="relative z-10 w-full max-w-lg rounded-md p-6"
+        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+      >
         <div className="mb-6 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+          <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
             Settings
           </h2>
           <button
             onClick={onClose}
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800 dark:hover:text-slate-300"
+            className="rounded p-1.5 transition-colors"
+            style={{ color: 'var(--text-tertiary)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-tertiary)'; }}
           >
             <svg
               className="h-5 w-5"
@@ -84,11 +90,7 @@ export default function SettingsOverlay({
               stroke="currentColor"
               strokeWidth={2}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M6 18L18 6M6 6l12 12"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
         </div>
@@ -96,27 +98,36 @@ export default function SettingsOverlay({
         <div className="space-y-5">
           {/* Activation Key */}
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label
+              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Activation Key
             </label>
-            <p className="font-mono text-sm text-slate-600 dark:text-slate-400">
+            <p className="font-mono text-[13px]" style={{ color: 'var(--text-secondary)' }}>
               {maskedKey()}
             </p>
           </div>
 
           {/* Credit Balance */}
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label
+              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Credit Balance
             </label>
-            <p className="text-2xl font-semibold text-blue-600 dark:text-blue-400">
+            <p className="text-[20px] font-semibold" style={{ color: 'var(--accent)' }}>
               {creditBalance.toLocaleString()}
             </p>
           </div>
 
           {/* Default Output Folder */}
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label
+              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Default Output Folder
             </label>
             <div className="flex gap-2">
@@ -125,11 +136,21 @@ export default function SettingsOverlay({
                 value={outputFolder}
                 onChange={handleOutputFolderChange}
                 placeholder="/path/to/output"
-                className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+                className="flex-1 rounded-sm px-2 py-1.5 text-[13px] outline-none"
+                style={{
+                  background: 'var(--bg-input)',
+                  border: '1px solid var(--border-default)',
+                  color: 'var(--text-primary)',
+                }}
+                onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--border-focus)'; }}
+                onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
               />
               <button
                 onClick={handleBrowse}
-                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+                className="rounded px-3 py-1.5 text-[13px] transition-colors"
+                style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
               >
                 Browse
               </button>
@@ -138,32 +159,35 @@ export default function SettingsOverlay({
 
           {/* App Version */}
           <div>
-            <label className="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">
+            <label
+              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
+              style={{ color: 'var(--text-secondary)' }}
+            >
               Version
             </label>
-            <p className="text-sm text-slate-500 dark:text-slate-400">
+            <p className="text-[13px]" style={{ color: 'var(--text-tertiary)' }}>
               DocTransform v1.0.0
             </p>
           </div>
 
           {/* Deactivate */}
-          <div className="border-t border-slate-200 pt-4 dark:border-slate-700">
+          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
             <button
               onClick={handleDeactivate}
-              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
-                confirmDeactivate
-                  ? "bg-red-600 text-white hover:bg-red-700"
-                  : "border border-red-300 text-red-600 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950/30"
-              }`}
+              className="rounded px-4 py-2 text-[13px] font-medium transition-colors"
+              style={{
+                background: confirmDeactivate ? 'var(--error)' : 'transparent',
+                color: confirmDeactivate ? '#fff' : 'var(--error)',
+                border: confirmDeactivate ? 'none' : '1px solid rgba(244,63,94,0.3)',
+              }}
             >
               {confirmDeactivate
                 ? "Confirm Deactivation"
                 : "Deactivate This Device"}
             </button>
             {confirmDeactivate && (
-              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                This will remove your activation key from this device. You can
-                reactivate later.
+              <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                This will remove your activation key from this device. You can reactivate later.
               </p>
             )}
           </div>

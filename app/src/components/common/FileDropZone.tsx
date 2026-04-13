@@ -44,7 +44,6 @@ export default function FileDropZone({
 
       setSelectedFiles((prev) => {
         const combined = [...prev, ...valid];
-        // Dedupe by name+size
         const seen = new Set<string>();
         const deduped = combined.filter((f) => {
           const key = `${f.name}:${f.size}`;
@@ -53,7 +52,6 @@ export default function FileDropZone({
           return true;
         });
 
-        // Notify parent after state update completes (avoid setState-during-render)
         queueMicrotask(() => {
           if (onFilesSelected) {
             onFilesSelected(deduped);
@@ -101,7 +99,6 @@ export default function FileDropZone({
       if (e.target.files && e.target.files.length > 0) {
         validateAndAdd(e.target.files);
       }
-      // Reset so the same file(s) can be selected again
       if (inputRef.current) inputRef.current.value = "";
     },
     [validateAndAdd]
@@ -151,17 +148,23 @@ export default function FileDropZone({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
       onClick={handleClick}
-      className={`
-        relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer
-        ${disabled ? "cursor-not-allowed opacity-50" : ""}
-        ${isDragging
-          ? "border-blue-500 bg-blue-50 dark:bg-blue-950/30"
+      className="relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer"
+      style={{
+        opacity: disabled ? 0.5 : 1,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        borderColor: error
+          ? 'var(--error)'
+          : isDragging
+            ? 'var(--accent)'
+            : hasFiles
+              ? 'var(--success)'
+              : 'var(--border-default)',
+        background: isDragging
+          ? 'var(--accent-muted)'
           : hasFiles
-            ? "border-green-400 bg-green-50 dark:border-green-600 dark:bg-green-950/20"
-            : "border-slate-300 bg-slate-50 hover:border-slate-400 dark:border-slate-600 dark:bg-slate-800/50 dark:hover:border-slate-500"
-        }
-        ${error ? "border-red-400 bg-red-50 dark:border-red-600 dark:bg-red-950/20" : ""}
-      `}
+            ? 'var(--success-muted)'
+            : 'var(--bg-input)',
+      }}
     >
       <input
         ref={inputRef}
@@ -178,11 +181,12 @@ export default function FileDropZone({
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
               <svg
-                className="h-5 w-5 text-green-500"
+                className="h-5 w-5"
                 fill="none"
                 viewBox="0 0 24 24"
                 stroke="currentColor"
                 strokeWidth={1.5}
+                style={{ color: 'var(--success)' }}
               >
                 <path
                   strokeLinecap="round"
@@ -190,13 +194,14 @@ export default function FileDropZone({
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                 />
               </svg>
-              <span className="text-sm font-medium text-slate-800 dark:text-slate-200">
+              <span className="text-[13px] font-medium" style={{ color: 'var(--text-primary)' }}>
                 {selectedFiles.length} file{selectedFiles.length !== 1 ? "s" : ""} selected
               </span>
             </div>
             <button
               onClick={clearAll}
-              className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-900/30"
+              className="rounded px-2 py-1 text-[11px] transition-colors"
+              style={{ color: 'var(--error)' }}
             >
               Clear All
             </button>
@@ -206,19 +211,21 @@ export default function FileDropZone({
             {selectedFiles.map((file, i) => (
               <li
                 key={`${file.name}-${file.size}-${i}`}
-                className="flex items-center justify-between rounded-md bg-white/60 px-3 py-1.5 dark:bg-slate-800/60"
+                className="flex items-center justify-between rounded px-3 py-1.5"
+                style={{ background: 'var(--bg-surface)' }}
               >
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm text-slate-700 dark:text-slate-300">
+                  <p className="truncate text-[13px]" style={{ color: 'var(--text-primary)' }}>
                     {file.name}
                   </p>
-                  <p className="text-xs text-slate-400 dark:text-slate-500">
+                  <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                     {formatSize(file.size)}
                   </p>
                 </div>
                 <button
                   onClick={(e) => removeFile(i, e)}
-                  className="ml-2 shrink-0 rounded p-1 text-red-500 hover:bg-red-100 dark:hover:bg-red-900/30"
+                  className="ml-2 shrink-0 rounded p-1 transition-colors"
+                  style={{ color: 'var(--error)' }}
                   aria-label={`Remove ${file.name}`}
                 >
                   <svg
@@ -228,29 +235,26 @@ export default function FileDropZone({
                     stroke="currentColor"
                     strokeWidth={2}
                   >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      d="M6 18L18 6M6 6l12 12"
-                    />
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
               </li>
             ))}
           </ul>
 
-          <p className="text-center text-xs text-slate-400 dark:text-slate-500">
+          <p className="text-center text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             Drop more files or click to add
           </p>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2 text-center">
           <svg
-            className="h-10 w-10 text-slate-400 dark:text-slate-500"
+            className="h-10 w-10"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth={1.5}
+            style={{ color: 'var(--text-tertiary)' }}
           >
             <path
               strokeLinecap="round"
@@ -258,17 +262,17 @@ export default function FileDropZone({
               d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z"
             />
           </svg>
-          <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
-            Drag & drop PDF files here, or click to browse
+          <p className="text-[13px] font-medium" style={{ color: 'var(--text-secondary)' }}>
+            Drop a file to process
           </p>
-          <p className="text-xs text-slate-400 dark:text-slate-500">
-            PDF files only - Max {maxSizeMB} MB per file
+          <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            PDF files only — Max {maxSizeMB} MB per file
           </p>
         </div>
       )}
 
       {error && (
-        <p className="mt-2 text-xs font-medium text-red-600 dark:text-red-400">
+        <p className="mt-2 text-[11px] font-medium" style={{ color: 'var(--error)' }}>
           {error}
         </p>
       )}

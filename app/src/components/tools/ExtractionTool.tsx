@@ -41,7 +41,6 @@ export default function ExtractionTool() {
 
   const allComplete = jobIds.length > 0 && completedCount >= jobIds.length;
 
-  // Load saved templates from localStorage
   useEffect(() => {
     try {
       const saved = localStorage.getItem("extraction_templates");
@@ -166,7 +165,6 @@ export default function ExtractionTool() {
         setError(
           err instanceof Error ? err.message : "Failed to start extraction."
         );
-        // Continue with remaining files
       }
     }
 
@@ -227,15 +225,15 @@ export default function ExtractionTool() {
   if (jobIds.length > 0 && processing && !allComplete) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
           Extracting Data
         </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
+        <p className="text-[13px]" style={{ color: 'var(--text-secondary)' }}>
           {completedCount} of {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} complete
         </p>
         {jobIds.map((id, i) => (
           <div key={id}>
-            <p className="mb-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+            <p className="mb-1 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
               {jobFileNames[i]}
             </p>
             <JobProgress
@@ -252,35 +250,32 @@ export default function ExtractionTool() {
   if (allComplete) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
           Extraction Complete
         </h2>
-        <div className="rounded-lg border border-green-200 bg-green-50 p-5 dark:border-green-900 dark:bg-green-950/20">
+        <div
+          className="rounded p-5"
+          style={{ background: 'var(--success-muted)', border: '1px solid rgba(16,185,129,0.2)' }}
+        >
           <div className="mb-3 flex items-center gap-2">
             <svg
-              className="h-5 w-5 text-green-600 dark:text-green-400"
+              className="h-5 w-5"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              style={{ color: 'var(--success)' }}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M5 13l4 4L19 7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
-            <span className="text-sm font-medium text-green-800 dark:text-green-300">
+            <span className="text-[13px] font-medium" style={{ color: 'var(--success)' }}>
               {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} extracted successfully
             </span>
           </div>
           {allOutputFiles.length > 0 && (
             <ul className="mb-4 space-y-1">
               {allOutputFiles.map((f, i) => (
-                <li
-                  key={i}
-                  className="text-xs text-green-700 dark:text-green-400"
-                >
+                <li key={i} className="text-[11px]" style={{ color: 'var(--success)' }}>
                   {f.split("/").pop()}
                 </li>
               ))}
@@ -289,13 +284,19 @@ export default function ExtractionTool() {
           <div className="flex gap-2">
             <button
               onClick={handleOpenOutputFolder}
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+              className="rounded px-3 py-1.5 text-[13px] font-semibold transition-colors"
+              style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
             >
               Open Output Folder
             </button>
             <button
               onClick={handleReset}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="rounded px-3 py-1.5 text-[13px] transition-colors"
+              style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             >
               Process Another File
             </button>
@@ -303,7 +304,10 @@ export default function ExtractionTool() {
         </div>
 
         {error && (
-          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+          <p
+            className="rounded p-3 text-[13px]"
+            style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+          >
             {error}
           </p>
         )}
@@ -313,27 +317,38 @@ export default function ExtractionTool() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+      <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
         Data Extraction
       </h2>
 
       <FileDropZone onFilesSelected={setFiles} disabled={processing} />
 
-      <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-        <h3 className="text-sm font-medium text-slate-900 dark:text-white">
+      <div
+        className="space-y-4 rounded p-5"
+        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+      >
+        <label
+          className="block text-[11px] font-medium uppercase tracking-[0.05em]"
+          style={{ color: 'var(--text-secondary)' }}
+        >
           Extraction Schema
-        </h3>
+        </label>
 
         {/* Template selector */}
         <div className="flex items-end gap-2">
           <div className="flex-1">
-            <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+            <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
               Template
             </label>
             <select
               value={selectedTemplate}
               onChange={handleTemplateSelect}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+              className="w-full rounded-sm px-2 py-1.5 text-[13px] outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
             >
               <option value="">Custom Schema</option>
               {templates.map((t) => (
@@ -345,7 +360,10 @@ export default function ExtractionTool() {
           </div>
           <button
             onClick={() => setShowSaveTemplate(!showSaveTemplate)}
-            className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+            className="rounded px-3 py-1.5 text-[13px] transition-colors"
+            style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+            onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
           >
             Save as Template
           </button>
@@ -358,12 +376,18 @@ export default function ExtractionTool() {
               value={templateName}
               onChange={(e) => setTemplateName(e.target.value)}
               placeholder="Template name"
-              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+              className="flex-1 rounded-sm px-2 py-1.5 text-[13px] outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
             />
             <button
               onClick={handleSaveTemplate}
               disabled={!templateName.trim()}
-              className="rounded-lg bg-blue-600 px-3 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+              className="rounded px-3 py-1.5 text-[13px] font-semibold transition-colors disabled:opacity-40"
+              style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
             >
               Save
             </button>
@@ -372,7 +396,7 @@ export default function ExtractionTool() {
 
         {/* Schema editor */}
         <div>
-          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+          <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             JSON Schema
           </label>
           <textarea
@@ -380,14 +404,15 @@ export default function ExtractionTool() {
             onChange={handleSchemaChange}
             rows={10}
             spellCheck={false}
-            className={`w-full rounded-lg border bg-slate-50 px-3 py-2 font-mono text-sm text-slate-900 focus:outline-none focus:ring-2 dark:bg-slate-900 dark:text-white ${
-              schemaError
-                ? "border-red-400 focus:ring-red-500/20"
-                : "border-slate-300 focus:border-blue-500 focus:ring-blue-500/20 dark:border-slate-600"
-            }`}
+            className="w-full rounded-sm px-3 py-2 font-mono text-[13px] outline-none"
+            style={{
+              background: 'var(--bg-input)',
+              border: `1px solid ${schemaError ? 'var(--error)' : 'var(--border-default)'}`,
+              color: 'var(--text-primary)',
+            }}
           />
           {schemaError && (
-            <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--error)' }}>
               {schemaError}
             </p>
           )}
@@ -395,7 +420,7 @@ export default function ExtractionTool() {
 
         {/* Prompt */}
         <div>
-          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+          <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             Custom Instruction (optional)
           </label>
           <textarea
@@ -403,26 +428,35 @@ export default function ExtractionTool() {
             onChange={(e) => setPrompt(e.target.value)}
             rows={3}
             placeholder="E.g., Extract all invoice line items including quantities and unit prices..."
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+            className="w-full rounded-sm px-3 py-2 text-[13px] outline-none"
+            style={{
+              background: 'var(--bg-input)',
+              border: '1px solid var(--border-default)',
+              color: 'var(--text-primary)',
+            }}
           />
         </div>
 
         {/* Output formats */}
         <div>
-          <label className="mb-2 block text-sm text-slate-600 dark:text-slate-400">
+          <label
+            className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Output Formats
           </label>
           <div className="flex gap-4">
             {(["json", "csv"] as const).map((fmt) => (
               <label
                 key={fmt}
-                className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"
+                className="flex items-center gap-2 text-[13px] cursor-pointer"
+                style={{ color: 'var(--text-primary)' }}
               >
                 <input
                   type="checkbox"
                   checked={outputFormats.has(fmt)}
                   onChange={() => toggleFormat(fmt)}
-                  className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+                  className="h-4 w-4 rounded-sm"
                 />
                 {fmt.toUpperCase()}
               </label>
@@ -432,7 +466,10 @@ export default function ExtractionTool() {
 
         {/* Output folder */}
         <div>
-          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+          <label
+            className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Output Folder
           </label>
           <div className="flex gap-2">
@@ -441,11 +478,21 @@ export default function ExtractionTool() {
               value={outputFolder}
               onChange={(e) => setOutputFolder(e.target.value)}
               placeholder="/path/to/output"
-              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+              className="flex-1 rounded-sm px-2 py-1.5 text-[13px] outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--border-focus)'; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
             />
             <button
               onClick={handleBrowse}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="rounded px-3 py-1.5 text-[13px] transition-colors"
+              style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             >
               Browse
             </button>
@@ -454,7 +501,10 @@ export default function ExtractionTool() {
       </div>
 
       {error && (
-        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+        <p
+          className="rounded p-3 text-[13px]"
+          style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+        >
           {error}
         </p>
       )}
@@ -462,7 +512,14 @@ export default function ExtractionTool() {
       <button
         onClick={handleProcess}
         disabled={files.length === 0 || outputFormats.size === 0 || !!schemaError}
-        className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        className="w-full rounded py-2 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+        style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+        onMouseEnter={(e) => {
+          if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--accent-hover)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'var(--accent)';
+        }}
       >
         Process{files.length > 1 ? ` ${files.length} Files` : ""}
       </button>

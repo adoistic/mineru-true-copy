@@ -3,19 +3,26 @@
 export default function TranslationTool() {
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+      <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
         Translation
       </h2>
 
       {/* Under construction banner */}
-      <div className="rounded-lg border border-amber-200 bg-amber-50 p-6 text-center dark:border-amber-900/50 dark:bg-amber-950/20">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/40">
+      <div
+        className="rounded p-6 text-center"
+        style={{ background: 'var(--warning-muted)', border: '1px solid rgba(245,158,11,0.2)' }}
+      >
+        <div
+          className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full"
+          style={{ background: 'rgba(245,158,11,0.15)' }}
+        >
           <svg
-            className="h-7 w-7 text-amber-600 dark:text-amber-400"
+            className="h-7 w-7"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
             strokeWidth={1.5}
+            style={{ color: 'var(--warning)' }}
           >
             <path
               strokeLinecap="round"
@@ -24,10 +31,10 @@ export default function TranslationTool() {
             />
           </svg>
         </div>
-        <h3 className="mb-2 text-lg font-semibold text-amber-800 dark:text-amber-300">
+        <h3 className="mb-2 text-[16px] font-semibold" style={{ color: 'var(--warning)' }}>
           Under Construction
         </h3>
-        <p className="mx-auto max-w-md text-sm text-amber-700 dark:text-amber-400">
+        <p className="mx-auto max-w-md text-[13px]" style={{ color: 'var(--text-secondary)' }}>
           Document translation is coming soon. This feature will allow you to
           translate PDF documents while preserving their original layout and
           formatting. Stay tuned for updates.
@@ -35,16 +42,20 @@ export default function TranslationTool() {
       </div>
 
       {/* Grayed-out mockup */}
-      <div className="pointer-events-none select-none opacity-40">
+      <div className="pointer-events-none select-none opacity-30">
         <div className="space-y-4">
           {/* Mock file drop */}
-          <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-slate-300 p-8 dark:border-slate-600">
+          <div
+            className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8"
+            style={{ borderColor: 'var(--border-default)' }}
+          >
             <svg
-              className="h-10 w-10 text-slate-400"
+              className="h-10 w-10"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={1.5}
+              style={{ color: 'var(--text-tertiary)' }}
             >
               <path
                 strokeLinecap="round"
@@ -52,38 +63,42 @@ export default function TranslationTool() {
                 d="M12 16.5V9.75m0 0l3 3m-3-3l-3 3M6.75 19.5a4.5 4.5 0 01-1.41-8.775 5.25 5.25 0 0110.233-2.33 3 3 0 013.758 3.848A3.752 3.752 0 0118 19.5H6.75z"
               />
             </svg>
-            <p className="mt-2 text-sm text-slate-500">
+            <p className="mt-2 text-[13px]" style={{ color: 'var(--text-tertiary)' }}>
               Drop a PDF to translate
             </p>
           </div>
 
           {/* Mock options */}
-          <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+          <div
+            className="rounded p-5"
+            style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+          >
             <div className="space-y-3">
               <div>
-                <label className="mb-1 block text-sm text-slate-600">
+                <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   Source Language
                 </label>
-                <div className="h-9 rounded-lg border border-slate-300 bg-slate-50 dark:border-slate-600" />
+                <div className="h-8 rounded-sm" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-default)' }} />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-slate-600">
+                <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   Target Language
                 </label>
-                <div className="h-9 rounded-lg border border-slate-300 bg-slate-50 dark:border-slate-600" />
+                <div className="h-8 rounded-sm" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-default)' }} />
               </div>
               <div>
-                <label className="mb-1 block text-sm text-slate-600">
+                <label className="mb-1 block text-[11px]" style={{ color: 'var(--text-secondary)' }}>
                   Output Folder
                 </label>
-                <div className="h-9 rounded-lg border border-slate-300 bg-slate-50 dark:border-slate-600" />
+                <div className="h-8 rounded-sm" style={{ background: 'var(--bg-input)', border: '1px solid var(--border-default)' }} />
               </div>
             </div>
           </div>
 
           <button
             disabled
-            className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white opacity-50"
+            className="w-full rounded py-2 text-[13px] font-semibold opacity-40"
+            style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
           >
             Translate
           </button>

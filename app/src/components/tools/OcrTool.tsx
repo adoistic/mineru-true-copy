@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
 import type { ExportFormat, ProcessingMode } from "@/types";
@@ -87,6 +87,8 @@ export default function OcrTool() {
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
+  const [creditBalance, setCreditBalance] = useState(0);
+  const [pageCount, setPageCount] = useState<number | null>(null);
 
   // Fetch mode availability from server health endpoint
   useEffect(() => {
@@ -97,14 +99,12 @@ export default function OcrTool() {
           const data = await res.json();
           setCloudAvailable(data.cloud_available ?? true);
           setLocalAvailable(data.local_available ?? true);
-          // Auto-switch to cloud if local isn't available
           if (!data.local_available && processingMode === "local") {
             if (data.cloud_available) {
               setProcessingMode("cloud");
               localStorage.setItem("processing_mode", "cloud");
             }
           }
-          // Auto-switch to local tables if cloud isn't available
           if (!data.cloud_available && tableMode === "cloud") {
             setTableMode("local");
             localStorage.setItem("table_mode", "local");
@@ -116,6 +116,44 @@ export default function OcrTool() {
     }
     checkModes();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch credit balance for estimate
+  useEffect(() => {
+    async function fetchCredits() {
+      const keyId = typeof window !== "undefined" ? localStorage.getItem("key_id") : null;
+      if (!keyId) return;
+      try {
+        const res = await fetch(`/api/credits?key_id=${keyId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setCreditBalance(data.balance?.balance ?? 0);
+        }
+      } catch {}
+    }
+    fetchCredits();
+  }, []);
+
+  // Estimate page count when files change
+  useEffect(() => {
+    if (files.length === 0) {
+      setPageCount(null);
+      return;
+    }
+    // Rough estimate: 1 page per 100KB, minimum 1 page per file
+    const estimated = files.reduce((sum, f) => {
+      const pages = Math.max(1, Math.round(f.size / (100 * 1024)));
+      return sum + pages;
+    }, 0);
+    setPageCount(estimated);
+  }, [files]);
+
+  // Credit estimate
+  const creditEstimate = useMemo(() => {
+    if (pageCount === null || pageCount === 0) return null;
+    const perPage = processingMode === "cloud" ? 1 : 0.25;
+    return Math.ceil(pageCount * perPage);
+  }, [pageCount, processingMode]);
+
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
   const [completedCount, setCompletedCount] = useState(0);
@@ -188,7 +226,6 @@ export default function OcrTool() {
         setError(
           err instanceof Error ? err.message : "Failed to start processing."
         );
-        // Continue with remaining files
       }
     }
 
@@ -250,15 +287,15 @@ export default function OcrTool() {
   if (jobIds.length > 0 && processing && !allComplete) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
           Processing OCR
         </h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400">
+        <p className="text-[13px]" style={{ color: 'var(--text-secondary)' }}>
           {completedCount} of {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} complete
         </p>
         {jobIds.map((id, i) => (
           <div key={id}>
-            <p className="mb-1 text-xs font-medium text-slate-600 dark:text-slate-400">
+            <p className="mb-1 text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
               {jobFileNames[i]}
             </p>
             <JobProgress
@@ -276,25 +313,25 @@ export default function OcrTool() {
   if (allComplete) {
     return (
       <div className="space-y-4">
-        <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+        <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
           OCR Complete
         </h2>
-        <div className="rounded-lg border border-green-200 bg-green-50 p-5 dark:border-green-900 dark:bg-green-950/20">
+        <div
+          className="rounded p-5"
+          style={{ background: 'var(--success-muted)', border: '1px solid rgba(16,185,129,0.2)' }}
+        >
           <div className="mb-3 flex items-center gap-2">
             <svg
-              className="h-5 w-5 text-green-600 dark:text-green-400"
+              className="h-5 w-5"
               fill="none"
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
+              style={{ color: 'var(--success)' }}
             >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M5 13l4 4L19 7"
-              />
+              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
-            <span className="text-sm font-medium text-green-800 dark:text-green-300">
+            <span className="text-[13px] font-medium" style={{ color: 'var(--success)' }}>
               {jobIds.length} file{jobIds.length !== 1 ? "s" : ""} processed successfully
             </span>
           </div>
@@ -302,10 +339,7 @@ export default function OcrTool() {
           {allOutputFiles.length > 0 && (
             <ul className="mb-4 space-y-1">
               {allOutputFiles.map((f, i) => (
-                <li
-                  key={i}
-                  className="text-xs text-green-700 dark:text-green-400"
-                >
+                <li key={i} className="text-[11px]" style={{ color: 'var(--success)' }}>
                   {f.split("/").pop()}
                 </li>
               ))}
@@ -315,13 +349,19 @@ export default function OcrTool() {
           <div className="flex gap-2">
             <button
               onClick={handleOpenOutputFolder}
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-700"
+              className="rounded px-3 py-1.5 text-[13px] font-semibold transition-colors"
+              style={{ background: 'var(--accent)', color: 'var(--text-inverse)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--accent-hover)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'var(--accent)'; }}
             >
               Open Output Folder
             </button>
             <button
               onClick={handleReset}
-              className="rounded-lg border border-slate-300 px-4 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="rounded px-3 py-1.5 text-[13px] transition-colors"
+              style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             >
               Process Another File
             </button>
@@ -329,7 +369,10 @@ export default function OcrTool() {
         </div>
 
         {error && (
-          <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+          <p
+            className="rounded p-3 text-[13px]"
+            style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+          >
             {error}
           </p>
         )}
@@ -337,9 +380,11 @@ export default function OcrTool() {
     );
   }
 
+  const insufficientCredits = creditEstimate !== null && creditEstimate > creditBalance;
+
   return (
     <div className="space-y-6">
-      <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+      <h2 className="text-[16px] font-semibold" style={{ color: 'var(--text-primary)' }}>
         OCR Processing
       </h2>
 
@@ -347,14 +392,16 @@ export default function OcrTool() {
       <FileDropZone onFilesSelected={setFiles} disabled={processing} />
 
       {/* Options */}
-      <div className="space-y-4 rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
-        <h3 className="text-sm font-medium text-slate-900 dark:text-white">
-          Options
-        </h3>
-
-        {/* Output folder */}
+      <div
+        className="space-y-4 rounded p-5"
+        style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+      >
+        {/* SECTION: Output Folder */}
         <div>
-          <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+          <label
+            className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Output Folder
           </label>
           <div className="flex gap-2">
@@ -363,23 +410,36 @@ export default function OcrTool() {
               value={outputFolder}
               onChange={(e) => setOutputFolder(e.target.value)}
               placeholder="/path/to/output"
-              className="flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder:text-slate-500"
+              className="flex-1 rounded-sm px-2 py-1.5 text-[13px] outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
+              onFocus={(e) => { e.currentTarget.style.borderColor = 'var(--border-focus)'; }}
+              onBlur={(e) => { e.currentTarget.style.borderColor = 'var(--border-default)'; }}
             />
             <button
               onClick={handleBrowse}
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-800"
+              className="rounded px-3 py-1.5 text-[13px] transition-colors"
+              style={{ background: 'transparent', color: 'var(--text-secondary)', border: '1px solid var(--border-default)' }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = 'var(--bg-elevated)'; e.currentTarget.style.color = 'var(--text-primary)'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.color = 'var(--text-secondary)'; }}
             >
               Browse
             </button>
           </div>
         </div>
 
-        {/* Output formats — grouped by category */}
+        {/* SECTION: Output Formats */}
         <div>
-          <label className="mb-3 block text-sm text-slate-600 dark:text-slate-400">
+          <label
+            className="mb-3 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Output Formats
           </label>
-          <div className="space-y-4">
+          <div className="space-y-3">
             {FORMAT_GROUPS.map((group) => {
               const groupKeys = group.formats.map(f => f.key);
               const allSelected = groupKeys.every(k => selectedFormats.has(k));
@@ -388,14 +448,18 @@ export default function OcrTool() {
               return (
                 <div
                   key={group.label}
-                  className="rounded-lg border border-slate-200 bg-slate-50/50 p-3 dark:border-slate-600 dark:bg-slate-700/30"
+                  className="rounded p-3"
+                  style={{ background: 'var(--bg-input)', border: '1px solid var(--border-subtle)' }}
                 >
                   <div className="mb-2 flex items-center justify-between">
                     <div>
-                      <span className="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      <span
+                        className="text-[11px] font-semibold uppercase tracking-[0.05em]"
+                        style={{ color: 'var(--text-secondary)' }}
+                      >
                         {group.label}
                       </span>
-                      <p className="text-xs text-slate-400 dark:text-slate-500">
+                      <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                         {group.description}
                       </p>
                     </div>
@@ -412,7 +476,10 @@ export default function OcrTool() {
                           return next;
                         });
                       }}
-                      className="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300"
+                      className="text-[11px] transition-colors"
+                      style={{ color: 'var(--accent-text)' }}
+                      onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--accent-text)'; }}
                     >
                       {allSelected ? "Deselect all" : noneSelected ? "Select all" : "Select all"}
                     </button>
@@ -421,14 +488,15 @@ export default function OcrTool() {
                     {group.formats.map(({ key, label, tooltip }) => (
                       <label
                         key={key}
-                        className="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"
+                        className="flex items-center gap-2 text-[13px] cursor-pointer"
+                        style={{ color: 'var(--text-primary)' }}
                         title={tooltip}
                       >
                         <input
                           type="checkbox"
                           checked={selectedFormats.has(key)}
                           onChange={() => toggleFormat(key)}
-                          className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+                          className="h-4 w-4 rounded-sm"
                         />
                         {label}
                       </label>
@@ -439,175 +507,164 @@ export default function OcrTool() {
             })}
           </div>
           {/* ZIP bundle option */}
-          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <label
+            className="mt-3 flex items-center gap-2 text-[13px] cursor-pointer"
+            style={{ color: 'var(--text-primary)' }}
+          >
             <input
               type="checkbox"
               checked={selectedFormats.has("zip")}
               onChange={() => toggleFormat("zip")}
-              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+              className="h-4 w-4 rounded-sm"
             />
             Bundle all outputs into a ZIP file
           </label>
         </div>
 
-        {/* Processing Mode */}
-        <div className="rounded-lg border border-slate-200 bg-slate-50/50 p-4 dark:border-slate-600 dark:bg-slate-700/30">
-          <h4 className="mb-3 text-sm font-medium text-slate-900 dark:text-white">
+        {/* SECTION: Processing Mode — segmented control */}
+        <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
+          <label
+            className="mb-3 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Processing Mode
-          </h4>
-
-          {/* Local Processing */}
-          <label className={`mb-3 flex cursor-pointer items-start gap-3 ${!localAvailable ? "opacity-50" : ""}`}>
-            <input
-              type="radio"
-              name="processing_mode"
-              value="local"
-              checked={processingMode === "local"}
-              disabled={!localAvailable}
-              onChange={() => {
-                setProcessingMode("local");
-                localStorage.setItem("processing_mode", "local");
-              }}
-              className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
-            />
-            <div className="flex-1">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-900 dark:text-white">
-                  Local Processing
-                </span>
-                {processingMode === "local" && (
-                  <span className="rounded bg-blue-100 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">
-                    default
-                  </span>
-                )}
-              </div>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Your document is processed entirely on this device.
-                No data leaves your computer. Faster for most documents.
-              </p>
-              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                Best for: clean prints, typed documents, standard layouts. 0.25 credits per page.
-              </p>
-            </div>
           </label>
 
-          {/* Cloud Processing */}
-          <label className={`flex cursor-pointer items-start gap-3 ${!cloudAvailable ? "opacity-50" : ""}`}>
-            <input
-              type="radio"
-              name="processing_mode"
-              value="cloud"
-              checked={processingMode === "cloud"}
+          {/* Segmented control */}
+          <div
+            className="mb-3 inline-flex rounded p-0.5"
+            style={{ background: 'var(--bg-elevated)' }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                if (cloudAvailable) {
+                  setProcessingMode("cloud");
+                  localStorage.setItem("processing_mode", "cloud");
+                }
+              }}
               disabled={!cloudAvailable}
-              onChange={() => {
-                setProcessingMode("cloud");
-                localStorage.setItem("processing_mode", "cloud");
+              className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
+              style={{
+                background: processingMode === "cloud" ? 'var(--accent)' : 'transparent',
+                color: processingMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                opacity: !cloudAvailable ? 0.4 : 1,
               }}
-              className="mt-1 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
-            />
-            <div className="flex-1">
-              <span className="text-sm font-medium text-slate-900 dark:text-white">
-                Cloud Processing
-              </span>
-              <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                Your document is sent to a secure cloud service for processing,
-                then results are returned to your device. More accurate on degraded
-                scans, handwriting, and complex layouts. Requires internet connection.
-              </p>
-              <p className="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
-                Best for: old/faded scans, handwritten notes, unusual fonts. 1 credit per page.
-              </p>
-            </div>
-          </label>
+            >
+              Cloud
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (localAvailable) {
+                  setProcessingMode("local");
+                  localStorage.setItem("processing_mode", "local");
+                }
+              }}
+              disabled={!localAvailable}
+              className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
+              style={{
+                background: processingMode === "local" ? 'var(--accent)' : 'transparent',
+                color: processingMode === "local" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                opacity: !localAvailable ? 0.4 : 1,
+              }}
+            >
+              Local
+            </button>
+          </div>
+
+          <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+            {processingMode === "cloud"
+              ? "Document sent to secure cloud for processing. Best for degraded scans, handwriting. 1 credit/page."
+              : "Processed on this device. No data leaves your computer. 0.25 credits/page."}
+          </p>
 
           {!cloudAvailable && (
-            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
+            <p className="mt-2 text-[11px]" style={{ color: 'var(--warning)' }}>
               Cloud processing is unavailable. Check your internet connection.
             </p>
           )}
           {!localAvailable && (
-            <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-              Local processing is not available on this installation. Using cloud processing.
+            <p className="mt-2 text-[11px]" style={{ color: 'var(--warning)' }}>
+              Local processing is not available on this installation.
             </p>
           )}
 
           {/* Table Extraction sub-section (only when Local Processing selected) */}
           {processingMode === "local" && (
-            <div className="mt-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-600 dark:bg-slate-800">
-              <h5 className="mb-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+            <div
+              className="mt-3 rounded p-3"
+              style={{ background: 'var(--bg-input)', border: '1px solid var(--border-subtle)' }}
+            >
+              <label
+                className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+                style={{ color: 'var(--text-secondary)' }}
+              >
                 Table Extraction
-              </h5>
-
-              <label className={`mb-2 flex cursor-pointer items-start gap-3 ${!cloudAvailable ? "opacity-50" : ""}`}>
-                <input
-                  type="radio"
-                  name="table_mode"
-                  value="cloud"
-                  checked={tableMode === "cloud"}
-                  disabled={!cloudAvailable}
-                  onChange={() => {
-                    setTableMode("cloud");
-                    localStorage.setItem("table_mode", "cloud");
-                  }}
-                  className="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-medium text-slate-900 dark:text-white">
-                      Cloud Tables
-                    </span>
-                    <span className="text-xs text-slate-400 dark:text-slate-500">recommended</span>
-                  </div>
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    Tables are sent to the cloud for higher accuracy. Complex tables
-                    with merged cells, nested headers, and irregular layouts are handled better.
-                    +0.5 credits per page that contains a table.
-                  </p>
-                </div>
               </label>
 
-              <label className="flex cursor-pointer items-start gap-3">
-                <input
-                  type="radio"
-                  name="table_mode"
-                  value="local"
-                  checked={tableMode === "local"}
-                  onChange={() => {
+              <div
+                className="mb-2 inline-flex rounded p-0.5"
+                style={{ background: 'var(--bg-elevated)' }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (cloudAvailable) {
+                      setTableMode("cloud");
+                      localStorage.setItem("table_mode", "cloud");
+                    }
+                  }}
+                  disabled={!cloudAvailable}
+                  className="rounded px-3 py-1 text-[11px] font-medium transition-colors"
+                  style={{
+                    background: tableMode === "cloud" ? 'var(--accent)' : 'transparent',
+                    color: tableMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                    opacity: !cloudAvailable ? 0.4 : 1,
+                  }}
+                >
+                  Cloud
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     setTableMode("local");
                     localStorage.setItem("table_mode", "local");
                   }}
-                  className="mt-0.5 h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
-                />
-                <div className="flex-1">
-                  <span className="text-xs font-medium text-slate-900 dark:text-white">
-                    Local Tables
-                  </span>
-                  <p className="mt-0.5 text-xs text-slate-500 dark:text-slate-400">
-                    Tables are processed locally. No additional credits. Works well for
-                    simple, regular tables. May struggle with complex merges or unusual
-                    structures. Choose this for fully offline processing.
-                  </p>
-                </div>
-              </label>
+                  className="rounded px-3 py-1 text-[11px] font-medium transition-colors"
+                  style={{
+                    background: tableMode === "local" ? 'var(--accent)' : 'transparent',
+                    color: tableMode === "local" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                  }}
+                >
+                  Local
+                </button>
+              </div>
 
-              {!cloudAvailable && tableMode === "cloud" && (
-                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">
-                  Cloud tables unavailable. Switching to local tables.
-                </p>
-              )}
+              <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                {tableMode === "cloud"
+                  ? "Tables sent to cloud for higher accuracy. +0.5 credits/page with tables."
+                  : "Tables processed locally. No additional credits."}
+              </p>
             </div>
           )}
         </div>
 
-        {/* Document Script / Language — only relevant for local processing */}
+        {/* SECTION: Document Script / Language — only relevant for local processing */}
         {processingMode === "local" && (
-        <div>
-          <label className="mb-2 block text-sm text-slate-600 dark:text-slate-400">
+        <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
+          <label
+            className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
             Document Script
           </label>
 
           {/* Auto-detect toggle */}
-          <label className="mb-2 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <label
+            className="mb-2 flex items-center gap-2 text-[13px] cursor-pointer"
+            style={{ color: 'var(--text-primary)' }}
+          >
             <input
               type="checkbox"
               checked={ocrLangs.includes("auto")}
@@ -616,21 +673,21 @@ export default function OcrTool() {
                 setOcrLangs(next);
                 localStorage.setItem("ocr_langs", JSON.stringify(next));
               }}
-              className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
+              className="h-4 w-4 rounded-sm"
             />
             Auto-detect
           </label>
           {ocrLangs.includes("auto") && (
-            <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
+            <p className="mb-2 text-[11px]" style={{ color: 'var(--warning)' }}>
               Auto-detect works best for Chinese, English, Japanese, Korean, Arabic, and Russian.
               For Hindi, Tamil, Telugu, Thai, or other scripts, turn off auto-detect and select manually for best results.
             </p>
           )}
 
-          {/* Manual script selection — single-select since each model handles one script + English */}
+          {/* Manual script selection */}
           {!ocrLangs.includes("auto") && (
             <div className="space-y-1">
-              <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">
+              <p className="mb-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                 Select the primary script in your document. Every model includes English automatically.
               </p>
               <div className="flex flex-wrap gap-2">
@@ -660,11 +717,17 @@ export default function OcrTool() {
                         setOcrLangs([value]);
                         localStorage.setItem("ocr_langs", JSON.stringify([value]));
                       }}
-                      className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-                        selected
-                          ? "bg-blue-600 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600"
-                      }`}
+                      className="rounded-full px-3 py-1 text-[11px] font-medium transition-colors"
+                      style={{
+                        background: selected ? 'var(--accent)' : 'var(--bg-elevated)',
+                        color: selected ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!selected) e.currentTarget.style.background = '#333';
+                      }}
+                      onMouseLeave={(e) => {
+                        if (!selected) e.currentTarget.style.background = 'var(--bg-elevated)';
+                      }}
                     >
                       {label}
                     </button>
@@ -674,7 +737,7 @@ export default function OcrTool() {
             </div>
           )}
 
-          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+          <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {ocrLangs.includes("auto")
               ? "Auto-detect supports: Chinese, English, Japanese, Korean, Arabic, Russian."
               : `Local processing will use the ${ocrLangs[0]} model (includes English).`}
@@ -682,10 +745,17 @@ export default function OcrTool() {
         </div>
         )}
 
-        {/* Toggles */}
-        <div className="space-y-3">
-          <label className="flex items-center justify-between">
-            <span className="text-sm text-slate-700 dark:text-slate-300">
+        {/* SECTION: Toggles */}
+        <div className="space-y-3" style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
+          <label
+            className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: 'var(--text-secondary)' }}
+          >
+            Processing Options
+          </label>
+
+          <label className="flex items-center justify-between cursor-pointer">
+            <span className="text-[13px]" style={{ color: 'var(--text-primary)' }}>
               Remove Headers/Footers
             </span>
             <button
@@ -693,22 +763,22 @@ export default function OcrTool() {
               role="switch"
               aria-checked={removeHeaders}
               onClick={() => setRemoveHeaders(!removeHeaders)}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                removeHeaders ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
-              }`}
+              className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
+              style={{ background: removeHeaders ? 'var(--accent)' : 'var(--bg-elevated)' }}
             >
               <span
-                className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
-                  removeHeaders ? "translate-x-5" : "translate-x-0"
+                className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
+                  removeHeaders ? "translate-x-4" : "translate-x-0.5"
                 }`}
+                style={{ marginTop: '2px' }}
               />
             </button>
           </label>
 
           {/* Include decorative items */}
           <div>
-            <label className="flex items-center justify-between">
-              <span className="text-sm text-slate-700 dark:text-slate-300">
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-[13px]" style={{ color: 'var(--text-primary)' }}>
                 Include decorative items
               </span>
               <button
@@ -716,35 +786,35 @@ export default function OcrTool() {
                 role="switch"
                 aria-checked={includeFigures}
                 onClick={() => setIncludeFigures(!includeFigures)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                  includeFigures ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
-                }`}
+                className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
+                style={{ background: includeFigures ? 'var(--accent)' : 'var(--bg-elevated)' }}
               >
                 <span
-                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
-                    includeFigures ? "translate-x-5" : "translate-x-0"
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
+                    includeFigures ? "translate-x-4" : "translate-x-0.5"
                   }`}
+                  style={{ marginTop: '2px' }}
                 />
               </button>
             </label>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Images, diagrams, and illustrations. Sometimes actual content can be classified as decorative, so we recommend keeping this on.
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              Images, diagrams, and illustrations. Sometimes actual content can be classified as decorative.
             </p>
             {includeFigures && (
               <div className="mt-2">
                 <select
                   value={figureDisplay}
                   onChange={(e) => setFigureDisplay(e.target.value as 'image' | 'text')}
-                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                  className="w-full rounded-sm px-2 py-1.5 text-[13px] outline-none"
+                  style={{
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--text-primary)',
+                  }}
                 >
                   <option value="image">Include as image</option>
                   <option value="text">Include as text placeholder</option>
                 </select>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                  {figureDisplay === 'image'
-                    ? "Embeds the original cropped image from the document."
-                    : "Shows a text placeholder where the image was detected."}
-                </p>
               </div>
             )}
           </div>
@@ -752,9 +822,12 @@ export default function OcrTool() {
 
         {/* Benchmark image overlay — visible when any true-copy format is selected */}
         {(selectedFormats.has("true_copy_html") || selectedFormats.has("true_copy_docx") || selectedFormats.has("true_copy_pdf") || selectedFormats.has("true_copy_pptx")) && (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-600 dark:bg-slate-700/50">
-            <label className="flex items-center justify-between">
-              <span className="text-sm text-slate-700 dark:text-slate-300">
+          <div
+            className="rounded p-3"
+            style={{ background: 'var(--bg-input)', border: '1px solid var(--border-subtle)' }}
+          >
+            <label className="flex items-center justify-between cursor-pointer">
+              <span className="text-[13px]" style={{ color: 'var(--text-primary)' }}>
                 Include page images in true-copy exports
               </span>
               <button
@@ -762,27 +835,27 @@ export default function OcrTool() {
                 role="switch"
                 aria-checked={includeBenchmarkHtml}
                 onClick={() => setIncludeBenchmarkHtml(!includeBenchmarkHtml)}
-                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                  includeBenchmarkHtml ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
-                }`}
+                className="relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors"
+                style={{ background: includeBenchmarkHtml ? 'var(--accent)' : 'var(--bg-elevated)' }}
               >
                 <span
-                  className={`pointer-events-none inline-block h-5 w-5 rounded-full bg-white shadow ring-0 transition-transform ${
-                    includeBenchmarkHtml ? "translate-x-5" : "translate-x-0"
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
+                    includeBenchmarkHtml ? "translate-x-4" : "translate-x-0.5"
                   }`}
+                  style={{ marginTop: '2px' }}
                 />
               </button>
             </label>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              Overlays OCR text on original page images for visual verification. Useful for benchmarking accuracy. Increases file size significantly.
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              Overlays OCR text on original page images for visual verification. Increases file size significantly.
             </p>
           </div>
         )}
 
         {/* Display mode selects */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-2 gap-4" style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
           <div>
-            <label className="mb-1 flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+            <label className="mb-1 flex items-center justify-between text-[13px]" style={{ color: 'var(--text-secondary)' }}>
               <span>Detect Formulas</span>
               <button
                 type="button"
@@ -793,14 +866,14 @@ export default function OcrTool() {
                   setFormulaEnable(next);
                   localStorage.setItem("formula_enable", String(next));
                 }}
-                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
-                  formulaEnable ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
-                }`}
+                className="relative inline-flex h-4 w-7 shrink-0 cursor-pointer rounded-full transition-colors"
+                style={{ background: formulaEnable ? 'var(--accent)' : 'var(--bg-elevated)' }}
               >
                 <span
-                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
-                    formulaEnable ? "translate-x-4" : "translate-x-0"
+                  className={`pointer-events-none inline-block h-3 w-3 rounded-full bg-white shadow ring-0 transition-transform ${
+                    formulaEnable ? "translate-x-3" : "translate-x-0.5"
                   }`}
+                  style={{ marginTop: '2px' }}
                 />
               </button>
             </label>
@@ -809,55 +882,90 @@ export default function OcrTool() {
                 <select
                   value={formulaDisplay}
                   onChange={(e) => setFormulaDisplay(e.target.value as 'rendered' | 'image')}
-                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                  className="mt-1 w-full rounded-sm px-2 py-1.5 text-[13px] outline-none"
+                  style={{
+                    background: 'var(--bg-input)',
+                    border: '1px solid var(--border-default)',
+                    color: 'var(--text-primary)',
+                  }}
                 >
                   <option value="image">Original Image (recommended)</option>
                   <option value="rendered">Rendered Text</option>
                 </select>
-                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                   {formulaDisplay === 'image'
                     ? "Shows the original formula as it appears in the document."
-                    : "Attempts to reconstruct formulas as rendered text. Extraction can sometimes be inaccurate for complex equations."}
+                    : "Attempts to reconstruct formulas as rendered text."}
                 </p>
               </>
             ) : (
-              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                Off — skips formula detection for faster processing. Turn on if your document contains math equations.
+              <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+                Off. Turn on if your document contains math equations.
               </p>
             )}
           </div>
           <div>
-            <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
+            <label className="mb-1 block text-[13px]" style={{ color: 'var(--text-secondary)' }}>
               Table Display
             </label>
             <select
               value={tableDisplay}
               onChange={(e) => setTableDisplay(e.target.value as 'rendered' | 'image')}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+              className="w-full rounded-sm px-2 py-1.5 text-[13px] outline-none"
+              style={{
+                background: 'var(--bg-input)',
+                border: '1px solid var(--border-default)',
+                color: 'var(--text-primary)',
+              }}
             >
               <option value="rendered">Rendered Table</option>
               <option value="image">Original Image</option>
             </select>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            <p className="mt-1 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
               {tableDisplay === 'image'
                 ? "Shows the original table as it appears in the document."
-                : "Reconstructs tables as editable HTML. Structure extraction may vary for complex layouts."}
+                : "Reconstructs tables as editable HTML."}
             </p>
           </div>
         </div>
       </div>
 
       {error && (
-        <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-950/30 dark:text-red-400">
+        <p
+          className="rounded p-3 text-[13px]"
+          style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+        >
           {error}
         </p>
+      )}
+
+      {/* Credit estimate */}
+      {creditEstimate !== null && files.length > 0 && (
+        <div className="flex items-center justify-between text-[11px]" style={{ color: insufficientCredits ? 'var(--error)' : 'var(--text-secondary)' }}>
+          <span>
+            Est. {creditEstimate} credit{creditEstimate !== 1 ? "s" : ""} for ~{pageCount} page{pageCount !== 1 ? "s" : ""}
+          </span>
+          {insufficientCredits && (
+            <span style={{ color: 'var(--error)' }}>Insufficient credits</span>
+          )}
+        </div>
       )}
 
       {/* Process button */}
       <button
         onClick={handleProcess}
-        disabled={files.length === 0 || selectedFormats.size === 0}
-        className="w-full rounded-lg bg-blue-600 px-4 py-3 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
+        disabled={files.length === 0 || selectedFormats.size === 0 || insufficientCredits}
+        className="w-full rounded py-2 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
+        style={{
+          background: 'var(--accent)',
+          color: 'var(--text-inverse)',
+        }}
+        onMouseEnter={(e) => {
+          if (!e.currentTarget.disabled) e.currentTarget.style.background = 'var(--accent-hover)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'var(--accent)';
+        }}
       >
         Process{files.length > 1 ? ` ${files.length} Files` : ""}
       </button>

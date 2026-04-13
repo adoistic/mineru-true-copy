@@ -25,9 +25,6 @@ export default function JobProgress({
   onError,
 }: JobProgressProps) {
   const [job, setJob] = useState<JobData | null>(null);
-  // Refs to prevent race conditions:
-  // - callbacks ref: avoids useCallback/useEffect churn when parent re-renders
-  // - settled ref: synchronous guard against double-fire (setState is async)
   const callbacksRef = useRef({ onComplete, onError });
   callbacksRef.current = { onComplete, onError };
   const settledRef = useRef(false);
@@ -47,7 +44,6 @@ export default function JobProgress({
         if (!active) return;
         setJob(data);
 
-        // Synchronous guard: only fire callbacks once per job
         if (settledRef.current) return;
 
         if (data.status === "completed") {
@@ -78,69 +74,74 @@ export default function JobProgress({
       ? Math.round((job.completed_pages / job.total_pages) * 100)
       : 0;
 
-  const statusColor =
-    job?.status === "completed"
-      ? "text-green-600 dark:text-green-400"
-      : job?.status === "failed" || job?.status === "permanently_failed"
-        ? "text-red-600 dark:text-red-400"
-        : "text-blue-600 dark:text-blue-400";
+  const isComplete = job?.status === "completed";
+  const isFailed = job?.status === "failed" || job?.status === "permanently_failed";
 
-  const barColor =
-    job?.status === "completed"
-      ? "bg-green-500"
-      : job?.status === "failed" || job?.status === "permanently_failed"
-        ? "bg-red-500"
-        : "bg-blue-600";
+  const statusColor = isComplete
+    ? 'var(--success)'
+    : isFailed
+      ? 'var(--error)'
+      : 'var(--accent)';
+
+  const barColor = isComplete
+    ? 'var(--success)'
+    : isFailed
+      ? 'var(--error)'
+      : 'var(--accent)';
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+    <div
+      className="rounded p-4"
+      style={{ background: 'var(--bg-surface)', border: '1px solid var(--border-default)' }}
+    >
       <div className="mb-3 flex items-center justify-between">
-        <span className={`text-sm font-medium capitalize ${statusColor}`}>
+        <span className="text-[13px] font-medium capitalize" style={{ color: statusColor }}>
           {job?.status?.replace("_", " ") ?? "Loading..."}
         </span>
         {job && job.total_pages > 0 && (
-          <span className="text-xs text-slate-500 dark:text-slate-400">
+          <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
             Page {job.completed_pages} / {job.total_pages}
           </span>
         )}
       </div>
 
-      <div className="h-2.5 w-full overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+      <div
+        className="h-1.5 w-full overflow-hidden rounded-full"
+        style={{ background: 'var(--bg-elevated)' }}
+      >
         <div
-          className={`h-full rounded-full transition-all duration-300 ${barColor}`}
-          style={{ width: `${progress}%` }}
+          className="h-full rounded-full transition-all duration-300"
+          style={{ width: `${progress}%`, background: barColor }}
         />
       </div>
 
       {job?.message && (
-        <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+        <p className="mt-2 text-[11px]" style={{ color: 'var(--text-secondary)' }}>
           {job.message}
         </p>
       )}
 
-      {job?.status === "completed" && job.output_files && (
+      {isComplete && job.output_files && (
         <div className="mt-4">
-          <h4 className="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+          <h4 className="mb-2 text-[11px] font-medium uppercase tracking-[0.05em]" style={{ color: 'var(--text-secondary)' }}>
             Output Files
           </h4>
           <ul className="space-y-1">
             {job.output_files.map((file, i) => (
               <li
                 key={i}
-                className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400"
+                className="flex items-center gap-2 text-[11px]"
+                style={{ color: 'var(--text-secondary)' }}
               >
                 <svg
-                  className="h-3.5 w-3.5 text-green-500"
+                  className="h-3.5 w-3.5"
                   fill="none"
                   viewBox="0 0 24 24"
                   stroke="currentColor"
                   strokeWidth={2}
+                  style={{ color: 'var(--success)' }}
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M5 13l4 4L19 7"
-                  />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                 </svg>
                 {file.split("/").pop()}
               </li>
@@ -149,12 +150,14 @@ export default function JobProgress({
         </div>
       )}
 
-      {(job?.status === "failed" || job?.status === "permanently_failed") &&
-        job.error_message && (
-          <p className="mt-3 rounded bg-red-50 p-2 text-xs text-red-700 dark:bg-red-950/30 dark:text-red-400">
-            {job.error_message}
-          </p>
-        )}
+      {isFailed && job.error_message && (
+        <p
+          className="mt-3 rounded p-2 text-[11px]"
+          style={{ background: 'var(--error-muted)', color: 'var(--error)' }}
+        >
+          {job.error_message}
+        </p>
+      )}
     </div>
   );
 }

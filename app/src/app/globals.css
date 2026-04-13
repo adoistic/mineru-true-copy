@@ -1,8 +1,41 @@
 @import "tailwindcss";
 
 :root {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  /* Surfaces */
+  --bg-app: #111111;
+  --bg-surface: #1a1a1a;
+  --bg-elevated: #252525;
+  --bg-input: #1e1e1e;
+
+  /* Borders */
+  --border-default: #2a2a2a;
+  --border-subtle: #222222;
+  --border-focus: #0ea5e9;
+
+  /* Text */
+  --text-primary: #e5e5e5;
+  --text-secondary: #888888;
+  --text-tertiary: #555555;
+  --text-inverse: #111111;
+
+  /* Accent */
+  --accent: #0ea5e9;
+  --accent-hover: #38bdf8;
+  --accent-muted: rgba(14,165,233,0.1);
+  --accent-text: #38bdf8;
+
+  /* Semantic */
+  --success: #10b981;
+  --success-muted: rgba(16,185,129,0.1);
+  --warning: #f59e0b;
+  --warning-muted: rgba(245,158,11,0.1);
+  --error: #f43f5e;
+  --error-muted: rgba(244,63,94,0.1);
+  --info: #38bdf8;
+
+  /* Legacy compat */
+  --background: var(--bg-app);
+  --foreground: var(--text-primary);
 }
 
 @theme inline {
@@ -10,22 +43,39 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
-}
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #020617;
-    --foreground: #e2e8f0;
-  }
+  /* Custom colors for Tailwind */
+  --color-surface: var(--bg-surface);
+  --color-elevated: var(--bg-elevated);
+  --color-input: var(--bg-input);
+  --color-border: var(--border-default);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-focus: var(--border-focus);
+  --color-txt-primary: var(--text-primary);
+  --color-txt-secondary: var(--text-secondary);
+  --color-txt-tertiary: var(--text-tertiary);
+  --color-txt-inverse: var(--text-inverse);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-muted: var(--accent-muted);
+  --color-accent-text: var(--accent-text);
+  --color-ok: var(--success);
+  --color-ok-muted: var(--success-muted);
+  --color-warn: var(--warning);
+  --color-warn-muted: var(--warning-muted);
+  --color-err: var(--error);
+  --color-err-muted: var(--error-muted);
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
+  background: var(--bg-app);
+  color: var(--text-primary);
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+  line-height: 20px;
 }
 
-/* Custom scrollbar for the main content area */
+/* Custom scrollbar */
 .overflow-y-auto::-webkit-scrollbar {
   width: 6px;
 }
@@ -35,12 +85,15 @@ body {
 }
 
 .overflow-y-auto::-webkit-scrollbar-thumb {
-  background-color: #cbd5e1;
+  background-color: #333333;
   border-radius: 3px;
 }
 
-@media (prefers-color-scheme: dark) {
-  .overflow-y-auto::-webkit-scrollbar-thumb {
-    background-color: #334155;
-  }
+/* Accent checkbox styling */
+input[type="checkbox"]:checked {
+  accent-color: var(--accent);
+}
+
+input[type="radio"]:checked {
+  accent-color: var(--accent);
 }
