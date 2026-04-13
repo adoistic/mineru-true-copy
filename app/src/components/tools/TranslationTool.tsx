@@ -113,8 +113,10 @@ export default function TranslationTool() {
 
   // --- Server status ---
   const [serverAvailable, setServerAvailable] = useState<boolean | null>(null);
+  const [modelReady, setModelReady] = useState<boolean | null>(null);
+  const [loadedVariant, setLoadedVariant] = useState<string | null>(null);
 
-  // Check translation server health
+  // Check translation server health + model status
   useEffect(() => {
     async function checkServer() {
       try {
@@ -124,10 +126,58 @@ export default function TranslationTool() {
         setServerAvailable(false);
       }
     }
+
+    async function checkModels() {
+      try {
+        const res = await fetch("/api/translation/models");
+        if (!res.ok) {
+          setModelReady(false);
+          setLoadedVariant(null);
+          return;
+        }
+        const data = await res.json();
+        if (data.loaded?.variant) {
+          setModelReady(true);
+          setLoadedVariant(data.loaded.variant);
+        } else {
+          setModelReady(false);
+          setLoadedVariant(null);
+        }
+      } catch {
+        setModelReady(false);
+        setLoadedVariant(null);
+      }
+    }
+
     checkServer();
-    const interval = setInterval(checkServer, 30000);
+    checkModels();
+    const interval = setInterval(() => {
+      checkServer();
+      checkModels();
+    }, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  // Re-check model status when model variant changes
+  useEffect(() => {
+    async function checkModelForVariant() {
+      try {
+        const res = await fetch("/api/translation/models");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.loaded?.variant === modelVariant) {
+          setModelReady(true);
+          setLoadedVariant(data.loaded.variant);
+        } else {
+          setModelReady(false);
+          setLoadedVariant(data.loaded?.variant ?? null);
+        }
+      } catch {
+        setModelReady(false);
+      }
+    }
+    checkModelForVariant();
+  }, [modelVariant]);
 
   // Fetch credit balance
   useEffect(() => {
@@ -495,10 +545,13 @@ export default function TranslationTool() {
   // ---------------------------------------------------------------------------
   // RENDER: Main form
   // ---------------------------------------------------------------------------
+  const modelNotInstalled = modelReady === false && serverAvailable === true;
+
   const canTranslate =
     jsonData !== null &&
     selectedLangs.size > 0 &&
     !insufficientCredits &&
+    !modelNotInstalled &&
     outputFolder.length > 0;
 
   return (
@@ -780,6 +833,17 @@ export default function TranslationTool() {
               ? "Higher accuracy, slower processing. Best for official documents."
               : "Faster processing, slightly lower accuracy. Good for large batches."}
           </p>
+
+          {modelNotInstalled && (
+            <div
+              className="mt-3 rounded p-3 text-[11px]"
+              style={{ background: "var(--warning-muted)", color: "var(--warning)" }}
+            >
+              {loadedVariant
+                ? `The ${modelVariant === "1B" ? "Quality" : "Speed"} model is not loaded. The ${loadedVariant === "1B" ? "Quality" : "Speed"} model is currently active. Go to Settings to download or switch models.`
+                : `Model not installed. Go to Settings to download the ${modelVariant === "1B" ? "Quality" : "Speed"} model.`}
+            </div>
+          )}
         </div>
 
         {/* SECTION: Output Folder */}

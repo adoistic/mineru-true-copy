@@ -85,6 +85,7 @@ export default function Home() {
   const [mineruStatus, setMineruStatus] = useState<"green" | "yellow" | "red">(
     "yellow"
   );
+  const [translationStatus, setTranslationStatus] = useState<"green" | "red">("red");
   const [activeJobs, setActiveJobs] = useState(0);
 
   // Check activation on mount
@@ -129,6 +130,13 @@ export default function Home() {
         }
       } catch {
         setMineruStatus("red");
+      }
+
+      try {
+        const tRes = await fetch("/api/translation/health");
+        setTranslationStatus(tRes.ok ? "green" : "red");
+      } catch {
+        setTranslationStatus("red");
       }
     };
 
@@ -294,15 +302,23 @@ export default function Home() {
         className="flex h-6 shrink-0 items-center justify-between border-t px-4"
         style={{ background: 'var(--bg-surface)', borderColor: 'var(--border-default)' }}
       >
-        <div className="flex items-center gap-2">
-          <span className={`inline-block h-2 w-2 rounded-full ${statusDotColor}`} />
-          <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
-            {mineruStatus === "green"
-              ? "Ready"
-              : mineruStatus === "yellow"
-                ? "Starting..."
-                : "Offline"}
-          </span>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <span className={`inline-block h-2 w-2 rounded-full ${statusDotColor}`} />
+            <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              OCR {mineruStatus === "green"
+                ? "Ready"
+                : mineruStatus === "yellow"
+                  ? "Starting..."
+                  : "Offline"}
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`inline-block h-2 w-2 rounded-full ${translationStatus === "green" ? "bg-ok" : "bg-err"}`} />
+            <span className="text-[11px]" style={{ color: 'var(--text-secondary)' }}>
+              Translation {translationStatus === "green" ? "Ready" : "Offline"}
+            </span>
+          </div>
         </div>
         <div className="flex items-center gap-4">
           <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
