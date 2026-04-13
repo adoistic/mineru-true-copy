@@ -145,6 +145,7 @@ export interface ProcessingOptions {
   output_formats: ExportFormat[];
   output_folder: string;
   fix_headings?: boolean;
+  formula_enable?: boolean;                 // default false — skip MFD+MFR for speed
   formula_display?: 'rendered' | 'image';  // default 'image'
   table_display?: 'rendered' | 'image';    // default 'rendered'
   include_figures?: boolean;               // default true

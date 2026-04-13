@@ -14,6 +14,8 @@ import {
   PDFOperatorNames,
   PDFName,
 } from 'pdf-lib';
+import fontkit from '@pdf-lib/fontkit';
+import { fetchTtf, clearFontCache } from './font-loader';
 import fs from 'fs';
 
 /**
@@ -28,10 +30,15 @@ function wrapText(text: string, font: PDFFont, fontSize: number, maxWidth: numbe
 
   for (let i = 1; i < words.length; i++) {
     const testLine = currentLine + ' ' + words[i];
-    const testWidth = font.widthOfTextAtSize(testLine, fontSize);
-    if (testWidth <= maxWidth) {
-      currentLine = testLine;
-    } else {
+    try {
+      const testWidth = font.widthOfTextAtSize(testLine, fontSize);
+      if (testWidth <= maxWidth) {
+        currentLine = testLine;
+      } else {
+        lines.push(currentLine);
+        currentLine = words[i];
+      }
+    } catch {
       lines.push(currentLine);
       currentLine = words[i];
     }
@@ -47,7 +54,30 @@ export async function createSearchablePdf(
 ): Promise<void> {
   const originalBytes = fs.readFileSync(originalPdfPath);
   const pdfDoc = await PDFDocument.load(originalBytes);
-  const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  pdfDoc.registerFontkit(fontkit);
+
+  // Embed the document's font for non-Latin script support.
+  // Falls back to Helvetica for Latin-only documents.
+  let font: PDFFont;
+  const usedFonts = mineruOutput.used_fonts || {};
+  const firstFontFile = Object.keys(usedFonts)[0];
+  if (firstFontFile) {
+    try {
+      const ttfData = await fetchTtf(firstFontFile);
+      if (ttfData) {
+        // subset: false — subsetting strips GSUB/GPOS tables needed for
+        // complex scripts (Devanagari conjuncts, Arabic shaping, CJK)
+        font = await pdfDoc.embedFont(new Uint8Array(ttfData), { subset: false });
+      } else {
+        font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+      }
+    } catch (err) {
+      console.warn('[SearchablePDF] Font embed failed, falling back to Helvetica:', err);
+      font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+    }
+  } else {
+    font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+  }
 
   const pages = pdfDoc.getPages();
 
@@ -108,7 +138,8 @@ export async function createSearchablePdf(
         const lineY = regionTop - fontSize - (i * lineHeight);
 
         // Calculate horizontal scale to stretch this line to exactly fill regionWidth
-        const naturalWidth = font.widthOfTextAtSize(line, fontSize);
+        let naturalWidth = 0;
+        try { naturalWidth = font.widthOfTextAtSize(line, fontSize); } catch { /* glyph encoding error */ }
         let hScale = 100; // default: no scaling
         if (naturalWidth > 0) {
           hScale = (regionWidth / naturalWidth) * 100;
@@ -143,5 +174,6 @@ export async function createSearchablePdf(
   }
 
   const pdfBytes = await pdfDoc.save();
+  clearFontCache();
   fs.writeFileSync(outputPath, pdfBytes);
 }

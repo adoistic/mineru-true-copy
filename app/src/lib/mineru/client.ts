@@ -86,6 +86,7 @@ export function stopHealthMonitoring(): void {
 }
 
 export interface SubmitOptions {
+  formulaEnable?: boolean;
   formulaDisplay?: 'rendered' | 'image';
   tableDisplay?: 'rendered' | 'image';
   includeFigures?: boolean;
@@ -111,6 +112,7 @@ export async function submitFile(filePath: string, options?: SubmitOptions): Pro
   formData.append('file', new Blob([fileBuffer]), fileName);
   formData.append('parse_method', 'auto');
   formData.append('is_json_md_dump', 'true');
+  if (options?.formulaEnable !== undefined) formData.append('formula_enable', String(options.formulaEnable));
   if (options?.formulaDisplay) formData.append('formula_display', options.formulaDisplay);
   if (options?.tableDisplay) formData.append('table_display', options.tableDisplay);
   if (options?.includeFigures !== undefined) formData.append('include_figures', String(options.includeFigures));

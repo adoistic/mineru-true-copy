@@ -28,6 +28,7 @@ export class OcrPipeline implements Pipeline {
     });
 
     const taskId = await submitFile(job.file_path, {
+      formulaEnable: config.formula_enable,
       formulaDisplay: config.formula_display,
       tableDisplay: config.table_display,
       includeFigures: config.include_figures,

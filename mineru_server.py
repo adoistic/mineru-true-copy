@@ -855,7 +855,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # GPU-heavy: layout (DocLayout-YOLO), formula (MFD+UniMerNet), OCR (PaddleOCR/VLM)
         # Serialized via _gpu_lock so concurrent documents don't thrash the GPU.
         # CPU-only stages (Steps 2+) run in parallel after GPU lock is released.
-        formula_enable = True
+        formula_enable = config.get('formula_enable', False)
         table_enable = config.get('table_display') != 'image'
         t1 = time.time()
         logger.info('Waiting for GPU lock...', extra={'task_id': task_id})
@@ -1818,12 +1818,29 @@ def _is_list_item(line: str) -> bool:
     if re.match(r'^[\-\u2022\u25CF\u25CB\u25AA\u25AB\u2013\u2014\u27A4\u2023\u203A\u25B6\u25BA\u2219\u2605\u2606\*]\s', line):
         return True
     # Arabic numbered: 1. / 1) / (1) / [1] / 1.1. / 3.2.1. (multi-level)
-    if re.match(r'^(\d+\.)+\s', line) or re.match(r'^\d+\)\s', line) or re.match(r'^\(\d+\)\s', line) or re.match(r'^\[\d+\]\s', line):
+    # Also Devanagari digits: १. / १) / (१) etc.
+    if re.match(r'^([\d\u0966-\u096F]+\.)+\s', line) or re.match(r'^[\d\u0966-\u096F]+\)\s', line) or re.match(r'^\([\d\u0966-\u096F]+\)\s', line) or re.match(r'^\[[\d\u0966-\u096F]+\]\s', line):
         return True
     # Letters: (a) / a. / a) / [a]  (excluding roman-ambiguous single letters)
     if re.match(r'^\([a-zA-Z]\)\s', line) or re.match(r'^\[[a-zA-Z]\]\s', line):
         return True
     if re.match(r'^[a-zA-Z][\.\)]\s', line):
+        return True
+    # Devanagari letter numbering: क) / (क) / क. / [क] etc.
+    # Consonants U+0915-U+0939, vowels U+0905-U+0914
+    if re.match(r'^\([\u0905-\u0939]\)\s', line) or re.match(r'^\[[\u0905-\u0939]\]\s', line):
+        return True
+    if re.match(r'^[\u0905-\u0939][\.\)]\s', line):
+        return True
+    # English alphabet transliterated into Devanagari: ए) / (बी) / सी. etc.
+    # A=ए, B=बी, C=सी, D=डी, E=ई, F=एफ, G=जी, H=एच, I=आई, J=जे,
+    # K=के, L=एल, M=एम, N=एन, O=ओ, P=पी, Q=क्यू, R=आर, S=एस, T=टी,
+    # U=यू, V=वी, W=डब्ल्यू, X=एक्स, Y=वाई, Z=ज़ेड
+    _DEVA_ABC = (r'(?:ए|बी|सी|डी|ई|एफ|जी|एच|आई|जे|के|एल|एम|एन|ओ|'
+                 r'पी|क्यू|आर|एस|टी|यू|वी|डब्ल्यू|एक्स|वाई|ज़ेड)')
+    if re.match(r'^\(' + _DEVA_ABC + r'\)\s', line):
+        return True
+    if re.match(r'^' + _DEVA_ABC + r'[\.\)]\s', line):
         return True
     # Roman numerals in parens: (i), (ii), (iii), (iv), (v), (vi), etc.
     m = re.match(r'^\(([ivxlcdm]+)\)\s', line, re.IGNORECASE)
@@ -1837,7 +1854,8 @@ def _is_list_item(line: str) -> bool:
     if re.match(r'^[ivxIVX][\.\)]\s', line):
         return True
     # Section/Article/Part/Chapter/Item/Note/Step/Appendix/References prefixes
-    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References)\b', line, re.IGNORECASE):
+    # Also Hindi equivalents: अध्याय (chapter), भाग (part), खंड (section)
+    if re.match(r'^(?:Section|Article|Part|Chapter|Item|Note|Step|Appendix|References|अध्याय|भाग|खंड|परिशिष्ट)\b', line, re.IGNORECASE):
         return True
     return False
 
@@ -2889,6 +2907,7 @@ class MineruHandler(BaseHTTPRequestHandler):
 
         # Parse display preferences from form fields
         config = {
+            'formula_enable': fields.get('formula_enable', 'false').lower() == 'true',
             'formula_display': fields.get('formula_display', 'image'),
             'table_display': fields.get('table_display', 'rendered'),
             'include_figures': fields.get('include_figures', 'true').lower() != 'false',

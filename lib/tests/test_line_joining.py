@@ -346,6 +346,59 @@ class TestIsListItem:
     def test_chapter_keyword(self):
         assert _is_list_item('Chapter 1')
 
+    # Hindi / Devanagari patterns
+    def test_devanagari_consonant_paren(self):
+        assert _is_list_item('क) पहला विकल्प')  # ka) first option
+
+    def test_devanagari_consonant_in_parens(self):
+        assert _is_list_item('(ख) दूसरा विकल्प')  # (kha) second option
+
+    def test_devanagari_consonant_dot(self):
+        assert _is_list_item('ग. तीसरा विकल्प')  # ga. third option
+
+    def test_devanagari_vowel_paren(self):
+        assert _is_list_item('अ) स्वर विकल्प')  # a) vowel option
+
+    def test_devanagari_vowel_in_parens(self):
+        assert _is_list_item('(इ) स्वर विकल्प')  # (i) vowel option
+
+    def test_devanagari_digit_dot(self):
+        assert _is_list_item('१. पहला आइटम')  # 1. first item (Devanagari digits)
+
+    def test_devanagari_digit_paren(self):
+        assert _is_list_item('२) दूसरा आइटम')  # 2) second item
+
+    def test_devanagari_digit_in_parens(self):
+        assert _is_list_item('(३) तीसरा आइटम')  # (3) third item
+
+    def test_hindi_chapter_keyword(self):
+        assert _is_list_item('अध्याय 1')  # Chapter 1
+
+    def test_hindi_section_keyword(self):
+        assert _is_list_item('खंड 3: विश्लेषण')  # Section 3: Analysis
+
+    def test_devanagari_text_not_list(self):
+        assert not _is_list_item('यह सिर्फ एक वाक्य है।')  # Just a sentence
+
+    # English alphabet in Devanagari script (ए=A, बी=B, सी=C, etc.)
+    def test_deva_abc_a_paren(self):
+        assert _is_list_item('ए) पहला विकल्प')  # A) first option
+
+    def test_deva_abc_b_in_parens(self):
+        assert _is_list_item('(बी) दूसरा विकल्प')  # (B) second option
+
+    def test_deva_abc_c_dot(self):
+        assert _is_list_item('सी. तीसरा विकल्प')  # C. third option
+
+    def test_deva_abc_d_paren(self):
+        assert _is_list_item('डी) चौथा विकल्प')  # D) fourth option
+
+    def test_deva_abc_p_dot(self):
+        assert _is_list_item('पी. सोलहवां')  # P. sixteenth
+
+    def test_deva_abc_multi_char_ef(self):
+        assert _is_list_item('एफ) छठा विकल्प')  # F) sixth option
+
 
 class TestDetectListContent:
     """Tests for block-level list reclassification."""

@@ -184,11 +184,18 @@ def patch():
         )
         images = [image for image, _, _ in images_with_extra_info]
 
-        # Batch sizes for GPU inference. Default MinerU uses batch_size=1 for
-        # layout and MFD (one page at a time through GPU). On Apple Silicon with
-        # unified memory, we can batch many pages at once for better throughput.
-        _layout_batch = 8
-        _mfd_batch = 8
+        # Batch sizes for GPU inference, scaled to available system RAM.
+        # Each page uses ~700-900MB GPU memory for feature maps.
+        # Conservative: leave 6GB headroom for OS + other models in memory.
+        import psutil as _psutil
+        _total_gb = _psutil.virtual_memory().total / (1024 ** 3)
+        _usable_gb = max(1, _total_gb - 6)
+        # ~0.9GB per page in a batch → safe batch count
+        _gpu_batch = max(1, min(32, int(_usable_gb / 0.9)))
+        _layout_batch = _gpu_batch
+        _mfd_batch = _gpu_batch
+        logger.info('[patch_mineru] System RAM: %.0fGB, GPU batch size: %d',
+                    _total_gb, _gpu_batch)
 
         if self.model.layout_model_name == MODEL_NAME.DocLayout_YOLO:
             layout_images = list(images)
@@ -225,36 +232,69 @@ def patch():
                 table_res_list_all_page.append({
                     'table_res': table_res, 'lang': _lang, 'table_img': table_img})
 
-        # OCR detection
-        for ocr_res_list_dict in tqdm(ocr_res_list_all_page, desc="OCR-det Predict"):
-            _lang = ocr_res_list_dict['lang']
-            atom_model_manager = AtomModelSingleton()
-            ocr_model = atom_model_manager.get_atom_model(
+        # OCR detection — parallelized across CPU cores
+        # Flatten all (page, region) pairs into a work list so we can process
+        # them concurrently. Cloud mode uses OpenCV (pure CPU) so every core
+        # helps. Local mode hits GPU for detection, but CPU prep (crop, color
+        # convert, box adjustment) can overlap with GPU inference.
+        import os as _os
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        _det_work = []
+        for page_dict in ocr_res_list_all_page:
+            _lang = page_dict['lang']
+            for res in page_dict['ocr_res_list']:
+                _det_work.append((page_dict, res, _lang))
+
+        # Get OCR model once per language (on this thread where threading.local is set)
+        _det_ocr_models = {}
+        _det_langs = {lang for _, _, lang in _det_work}
+        for lang in _det_langs:
+            _det_ocr_models[lang] = AtomModelSingleton().get_atom_model(
                 atom_model_name='ocr', ocr_show_log=False,
-                det_db_box_thresh=0.3, lang=_lang)
-            for res in ocr_res_list_dict['ocr_res_list']:
-                new_image, useful_list = crop_img(
-                    res, ocr_res_list_dict['np_array_img'],
-                    crop_paste_x=50, crop_paste_y=50)
-                adjusted_mfdetrec_res = get_adjusted_mfdetrec_res(
-                    ocr_res_list_dict['single_page_mfdetrec_res'], useful_list)
-                new_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)
-                ocr_res = ocr_model.ocr(
-                    new_image, mfd_res=adjusted_mfdetrec_res, rec=False)[0]
-                if ocr_res:
-                    ocr_result_list = get_ocr_result_list(
-                        ocr_res, useful_list, ocr_res_list_dict['ocr_enable'],
-                        new_image, _lang)
+                det_db_box_thresh=0.3, lang=lang)
 
-                    # PATCHED: skip figure->text reclassification entirely.
-                    # MinerU's default reclassifies figures as text when >25%
-                    # of the area has OCR text. For rasterized PDFs our OCR
-                    # detector finds text everywhere, so ALL figures would
-                    # be reclassified. Trust DocLayout-YOLO's classification.
-                    if res["category_id"] == 3:
-                        continue  # preserve figure, skip OCR text for it
+        def _det_one(args):
+            page_dict, res, lang = args
+            new_image, useful_list = crop_img(
+                res, page_dict['np_array_img'],
+                crop_paste_x=50, crop_paste_y=50)
+            adjusted_mfdetrec_res = get_adjusted_mfdetrec_res(
+                page_dict['single_page_mfdetrec_res'], useful_list)
+            new_image = cv2.cvtColor(new_image, cv2.COLOR_RGB2BGR)
+            ocr_res = _det_ocr_models[lang].ocr(
+                new_image, mfd_res=adjusted_mfdetrec_res, rec=False)[0]
+            if ocr_res:
+                ocr_result_list = get_ocr_result_list(
+                    ocr_res, useful_list, page_dict['ocr_enable'],
+                    new_image, lang)
+                # PATCHED: skip figure->text reclassification entirely.
+                if res["category_id"] == 3:
+                    return None
+                return (page_dict, ocr_result_list)
+            return None
 
-                    ocr_res_list_dict['layout_res'].extend(ocr_result_list)
+        n_det_work = len(_det_work)
+        if n_det_work > 0:
+            # Cloud mode: pure CPU (OpenCV), use all cores.
+            # Local mode: GPU detection is serial, but 2 threads lets CPU
+            # prep overlap with GPU inference (prefetch pattern).
+            n_cpu = _os.cpu_count() or 4
+            n_workers = n_cpu if _ocr_mode == 'cloud' else min(2, n_det_work)
+            logger.info('[patch_mineru] OCR-det: %d regions, %d workers (mode=%s)',
+                        n_det_work, n_workers, _ocr_mode)
+
+            # Collect results, then apply to layout_res (thread-safe: each
+            # page_dict's layout_res is only extended by its own results)
+            _det_results = []
+            with _TPE(max_workers=n_workers) as executor:
+                for result in tqdm(executor.map(_det_one, _det_work),
+                                   total=n_det_work, desc="OCR-det Predict"):
+                    if result is not None:
+                        _det_results.append(result)
+
+            for page_dict, ocr_result_list in _det_results:
+                page_dict['layout_res'].extend(ocr_result_list)
 
         # ---- Collect data for concurrent phases ----
         need_ocr_lists_by_lang = {}
@@ -308,9 +348,12 @@ def patch():
                     if expected_ending:
                         table_res_dict['table_res']['html'] = html_code
 
-            # Concurrency: local RapidTable on CPU caps at 4, cloud API at 30
+            # Concurrency: local RapidTable is CPU-bound, use all cores.
+            # Cloud API: cap at 30 to avoid rate limits.
+            import os as _os_t
+            _n_cpu_t = _os_t.cpu_count() or 4
             if _table_mode == 'local':
-                max_workers = min(len(table_res_list_all_page), 4)
+                max_workers = min(len(table_res_list_all_page), _n_cpu_t)
             else:
                 max_workers = min(len(table_res_list_all_page), 30)
 
@@ -345,13 +388,17 @@ def patch():
                     continue
                 ocr_model = ocr_model_by_lang[lang]
 
-                if len(img_crop_list) < 500 or _ocr_mode == 'cloud':
+                if len(img_crop_list) < 200 or _ocr_mode == 'cloud':
                     # Small lists or cloud mode: process directly
                     ocr_res_list = ocr_model.ocr(
                         img_crop_list, det=False, tqdm_enable=True)[0]
                 else:
-                    # Large local list: chunk and parallelize
-                    n_workers = min(4, max(1, len(img_crop_list) // 2000))
+                    # Large local list: chunk and parallelize across CPU cores.
+                    # CRNN rec releases GIL during C-level numpy/torch ops,
+                    # so threads overlap CPU preprocessing with GPU inference.
+                    import os as _os_r
+                    _n_cpu_r = _os_r.cpu_count() or 4
+                    n_workers = min(_n_cpu_r, max(2, len(img_crop_list) // 500))
                     chunk_size = (len(img_crop_list) + n_workers - 1) // n_workers
                     chunks = [img_crop_list[i:i + chunk_size]
                               for i in range(0, len(img_crop_list), chunk_size)]

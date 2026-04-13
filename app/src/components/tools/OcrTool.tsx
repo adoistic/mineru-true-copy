@@ -59,6 +59,11 @@ export default function OcrTool() {
   const [includeBenchmarkHtml, setIncludeBenchmarkHtml] = useState(false);
   const [removeHeaders, setRemoveHeaders] = useState(false);
   const [includeFigures, setIncludeFigures] = useState(true);
+  const [formulaEnable, setFormulaEnable] = useState(() =>
+    typeof window !== "undefined"
+      ? localStorage.getItem("formula_enable") === "true"
+      : false
+  );
   const [formulaDisplay, setFormulaDisplay] = useState<'rendered' | 'image'>('image');
   const [tableDisplay, setTableDisplay] = useState<'rendered' | 'image'>('rendered');
   const [figureDisplay, setFigureDisplay] = useState<'image' | 'text'>('image');
@@ -151,6 +156,7 @@ export default function OcrTool() {
             output_formats: Array.from(selectedFormats),
             output_folder: outputFolder,
             remove_headers_footers: removeHeaders,
+            formula_enable: formulaEnable,
             formula_display: formulaDisplay,
             table_display: tableDisplay,
             include_figures: includeFigures,
@@ -193,7 +199,7 @@ export default function OcrTool() {
 
     setJobIds(ids);
     setJobFileNames(names);
-  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode, ocrLangs]);
+  }, [files, selectedFormats, includeBenchmarkHtml, outputFolder, removeHeaders, formulaEnable, formulaDisplay, tableDisplay, includeFigures, figureDisplay, processingMode, tableMode, ocrLangs]);
 
   const handleJobComplete = useCallback((outputFiles: string[]) => {
     setAllOutputFiles((prev) => [...prev, ...outputFiles]);
@@ -593,7 +599,8 @@ export default function OcrTool() {
           )}
         </div>
 
-        {/* Document Script / Language */}
+        {/* Document Script / Language — only relevant for local processing */}
+        {processingMode === "local" && (
         <div>
           <label className="mb-2 block text-sm text-slate-600 dark:text-slate-400">
             Document Script
@@ -612,40 +619,37 @@ export default function OcrTool() {
               className="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600"
             />
             Auto-detect
-            {processingMode === "cloud" && (
-              <span className="text-xs text-slate-400 dark:text-slate-500">(recommended)</span>
-            )}
           </label>
-          {ocrLangs.includes("auto") && processingMode === "local" && (
+          {ocrLangs.includes("auto") && (
             <p className="mb-2 text-xs text-amber-600 dark:text-amber-400">
-              Local auto-detect works best for Chinese, English, Japanese, Korean, Arabic, and Russian.
+              Auto-detect works best for Chinese, English, Japanese, Korean, Arabic, and Russian.
               For Hindi, Tamil, Telugu, Thai, or other scripts, turn off auto-detect and select manually for best results.
             </p>
           )}
 
-          {/* Manual script selection (shown when auto-detect is off) */}
+          {/* Manual script selection — single-select since each model handles one script + English */}
           {!ocrLangs.includes("auto") && (
             <div className="space-y-1">
               <p className="mb-1 text-xs text-slate-500 dark:text-slate-400">
-                Select all scripts present in your document. English is included automatically with most scripts.
+                Select the primary script in your document. Every model includes English automatically.
               </p>
               <div className="flex flex-wrap gap-2">
                 {[
-                  { value: "en", label: "English" },
-                  { value: "ch", label: "Chinese (Simplified)" },
-                  { value: "chinese_cht", label: "Chinese (Traditional)" },
-                  { value: "devanagari", label: "Hindi / Devanagari" },
-                  { value: "arabic", label: "Arabic / Urdu" },
-                  { value: "latin", label: "Latin (French, Spanish...)" },
-                  { value: "korean", label: "Korean" },
-                  { value: "japan", label: "Japanese" },
-                  { value: "thai", label: "Thai" },
-                  { value: "ta", label: "Tamil" },
-                  { value: "te", label: "Telugu" },
-                  { value: "cyrillic", label: "Cyrillic (Russian...)" },
-                  { value: "greek", label: "Greek" },
-                  { value: "eslav", label: "East Slavic" },
-                  { value: "ka", label: "Georgian" },
+                  { value: "en", label: "English Only" },
+                  { value: "ch", label: "Chinese Simplified + English" },
+                  { value: "chinese_cht", label: "Chinese Traditional + English" },
+                  { value: "devanagari", label: "Hindi / Devanagari + English" },
+                  { value: "arabic", label: "Arabic / Urdu + English" },
+                  { value: "latin", label: "Latin (French, Spanish...) + English" },
+                  { value: "korean", label: "Korean + English" },
+                  { value: "japan", label: "Japanese + English" },
+                  { value: "thai", label: "Thai + English" },
+                  { value: "ta", label: "Tamil + English" },
+                  { value: "te", label: "Telugu + English" },
+                  { value: "cyrillic", label: "Cyrillic (Russian...) + English" },
+                  { value: "greek", label: "Greek + English" },
+                  { value: "eslav", label: "East Slavic + English" },
+                  { value: "ka", label: "Georgian + English" },
                 ].map(({ value, label }) => {
                   const selected = ocrLangs.includes(value);
                   return (
@@ -653,12 +657,8 @@ export default function OcrTool() {
                       key={value}
                       type="button"
                       onClick={() => {
-                        const next = selected
-                          ? ocrLangs.filter((l) => l !== value)
-                          : [...ocrLangs, value];
-                        const final = next.length === 0 ? ["en"] : next;
-                        setOcrLangs(final);
-                        localStorage.setItem("ocr_langs", JSON.stringify(final));
+                        setOcrLangs([value]);
+                        localStorage.setItem("ocr_langs", JSON.stringify([value]));
                       }}
                       className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
                         selected
@@ -676,14 +676,11 @@ export default function OcrTool() {
 
           <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
             {ocrLangs.includes("auto")
-              ? processingMode === "cloud"
-                ? "Cloud processing auto-detects all scripts in the document."
-                : "Auto-detect supports: Chinese, English, Japanese, Korean, Arabic, Russian."
-              : processingMode === "cloud"
-                ? "Cloud processing handles any script. Your selection is used as a hint."
-                : `Local processing will use models for: ${ocrLangs.join(", ")}.`}
+              ? "Auto-detect supports: Chinese, English, Japanese, Korean, Arabic, Russian."
+              : `Local processing will use the ${ocrLangs[0]} model (includes English).`}
           </p>
         </div>
+        )}
 
         {/* Toggles */}
         <div className="space-y-3">
@@ -785,22 +782,49 @@ export default function OcrTool() {
         {/* Display mode selects */}
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">
-              Formula Display
+            <label className="mb-1 flex items-center justify-between text-sm text-slate-600 dark:text-slate-400">
+              <span>Detect Formulas</span>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={formulaEnable}
+                onClick={() => {
+                  const next = !formulaEnable;
+                  setFormulaEnable(next);
+                  localStorage.setItem("formula_enable", String(next));
+                }}
+                className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors ${
+                  formulaEnable ? "bg-blue-600" : "bg-slate-300 dark:bg-slate-600"
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow ring-0 transition-transform ${
+                    formulaEnable ? "translate-x-4" : "translate-x-0"
+                  }`}
+                />
+              </button>
             </label>
-            <select
-              value={formulaDisplay}
-              onChange={(e) => setFormulaDisplay(e.target.value as 'rendered' | 'image')}
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
-            >
-              <option value="image">Original Image (recommended)</option>
-              <option value="rendered">Rendered Text</option>
-            </select>
-            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
-              {formulaDisplay === 'image'
-                ? "Shows the original formula as it appears in the document."
-                : "Attempts to reconstruct formulas as rendered text. Extraction can sometimes be inaccurate for complex equations."}
-            </p>
+            {formulaEnable ? (
+              <>
+                <select
+                  value={formulaDisplay}
+                  onChange={(e) => setFormulaDisplay(e.target.value as 'rendered' | 'image')}
+                  className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"
+                >
+                  <option value="image">Original Image (recommended)</option>
+                  <option value="rendered">Rendered Text</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                  {formulaDisplay === 'image'
+                    ? "Shows the original formula as it appears in the document."
+                    : "Attempts to reconstruct formulas as rendered text. Extraction can sometimes be inaccurate for complex equations."}
+                </p>
+              </>
+            ) : (
+              <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                Off — skips formula detection for faster processing. Turn on if your document contains math equations.
+              </p>
+            )}
           </div>
           <div>
             <label className="mb-1 block text-sm text-slate-600 dark:text-slate-400">

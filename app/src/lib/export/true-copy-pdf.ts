@@ -43,7 +43,9 @@ export async function createTrueCopyPdf(
       try {
         const ttfData = await fetchTtf(filename);
         if (ttfData) {
-          const font = await doc.embedFont(new Uint8Array(ttfData));
+          // subset: false — subsetting strips GSUB/GPOS tables needed for
+          // complex scripts (Devanagari conjuncts, Arabic shaping, CJK ligatures)
+          const font = await doc.embedFont(new Uint8Array(ttfData), { subset: false });
           customFonts.set(family, font);
           ttfDataMap.set(family, ttfData);
         }

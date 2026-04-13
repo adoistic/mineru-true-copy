@@ -59,7 +59,9 @@ export async function createReflowedPdf(
     if (firstFontFile) {
       const ttfData = await fetchTtf(firstFontFile);
       if (ttfData) {
-        bodyFont = await doc.embedFont(new Uint8Array(ttfData));
+        // subset: false — subsetting strips GSUB/GPOS tables needed for
+        // complex scripts (Devanagari conjuncts, Arabic shaping, CJK ligatures)
+        bodyFont = await doc.embedFont(new Uint8Array(ttfData), { subset: false });
         boldFont = bodyFont; // Same font for now (bold variant would need separate file)
       } else {
         bodyFont = await doc.embedFont(StandardFonts.Helvetica);
@@ -243,7 +245,8 @@ async function drawReflowedRegion(
 
       for (const item of items) {
         // Strip bullet/number prefix and add a bullet
-        const cleanItem = item.replace(/^\s*(?:[\u2022\u25E6\u25AA\u25B8\-\u2013\u2014*]\s*|\d+[.)\]]\s*|\(\d+\)\s*|\([a-z]\)\s*)/i, '').trim();
+        // Supports English (a-z), Devanagari consonants (U+0905-U+0939), digits (0-9, ०-९), roman numerals
+        const cleanItem = item.replace(/^\s*(?:[\u2022\u25E6\u25AA\u25B8\-\u2013\u2014*]\s*|[\d\u0966-\u096F]+[.)\]]\s*|\([\d\u0966-\u096F]+\)\s*|\([a-z\u0905-\u0939]\)\s*|[a-z\u0905-\u0939][.)]\s*)/i, '').trim();
         const bulletText = `\u2022  ${cleanItem || item.trim()}`;
         const lines = wrapText(bulletText, bodyFont, baseFontSize, state.contentWidth - 20);
         const totalHeight = lines.length * lineH + 4;
