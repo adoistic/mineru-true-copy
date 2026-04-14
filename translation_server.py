@@ -126,6 +126,8 @@ _tasks_lock = threading.Lock()
 
 _last_request_time = time.time()
 _IDLE_TIMEOUT = 300  # 5 minutes
+_active_requests = 0  # count of in-flight synchronous handlers (e.g. /translate)
+_active_lock = threading.Lock()
 
 
 def _touch_activity():
@@ -134,24 +136,54 @@ def _touch_activity():
     _last_request_time = time.time()
 
 
+def _request_started():
+    """Mark an in-flight synchronous request. Call at handler entry."""
+    global _active_requests
+    with _active_lock:
+        _active_requests += 1
+
+
+def _request_finished():
+    """Mark request complete. Call in finally at handler exit."""
+    global _active_requests, _last_request_time
+    with _active_lock:
+        _active_requests = max(0, _active_requests - 1)
+    # Reset idle timer on completion so a long-running handler doesn't
+    # trip the watchdog immediately after returning.
+    _last_request_time = time.time()
+
+
 def _idle_watchdog(server: HTTPServer):
-    """Background thread: exit if idle for IDLE_TIMEOUT with no active tasks."""
+    """Background thread: exit if idle for IDLE_TIMEOUT with no active work.
+
+    IMPORTANT: long-running synchronous handlers (like /translate on a
+    full document) can exceed IDLE_TIMEOUT. They register in-flight via
+    _request_started/_request_finished so the watchdog does NOT kill
+    the server while a real request is still running. Only batch tasks
+    used to be checked here, which caused mid-inference kills.
+    """
     while True:
         time.sleep(30)
         elapsed = time.time() - _last_request_time
         if elapsed < _IDLE_TIMEOUT:
             continue
-        # Check for active tasks
-        has_active = False
+        # Any in-flight sync request? Any active batch task?
+        with _active_lock:
+            has_sync = _active_requests > 0
+        has_batch = False
         with _tasks_lock:
             for task in _tasks.values():
                 if task.get('status') == 'processing':
-                    has_active = True
+                    has_batch = True
                     break
-        if not has_active:
-            logger.info('Idle timeout (%.0fs), shutting down', elapsed)
-            server.shutdown()
-            return
+        if has_sync or has_batch:
+            # Work in progress; push the idle timer forward so we re-check
+            # after another full IDLE_TIMEOUT window.
+            _touch_activity()
+            continue
+        logger.info('Idle timeout (%.0fs), shutting down', elapsed)
+        server.shutdown()
+        return
 
 
 # ---------------------------------------------------------------------------
@@ -355,6 +387,10 @@ class TranslationHandler(BaseHTTPRequestHandler):
             self._send_json(400, {'error': 'tgt_lang is required'})
             return
 
+        # Register as in-flight so the idle watchdog doesn't shut the server
+        # down while a long document translation is running (real documents
+        # can easily exceed the 5-minute idle timeout on modest hardware).
+        _request_started()
         try:
             engine = _get_engine()
             needed_dir = _infer_direction(src_lang, tgt_lang)
@@ -391,6 +427,8 @@ class TranslationHandler(BaseHTTPRequestHandler):
             logger.error('Translation failed: %s', e, extra={'error': str(e)})
             traceback.print_exc()
             self._send_json(500, {'error': f'Translation failed: {str(e)}'})
+        finally:
+            _request_finished()
 
     def _handle_translate_batch(self):
         """POST /translate/batch — start async batch translation."""
