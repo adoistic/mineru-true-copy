@@ -193,16 +193,40 @@ class TranslationEngine:
 
         logger.info('Model unloaded')
 
+    # Max strings per GPU inference call. Larger batches are faster but consume
+    # more memory (especially with num_beams=5 and seq_len=256 on MPS). 1 keeps
+    # memory bounded so large documents don't trigger macOS jetsam kills.
+    _MAX_BATCH_SIZE = 1
+
     def translate_texts(self, texts: list[str], src_lang: str, tgt_lang: str) -> list[str]:
-        """Translate a batch of text strings in one GPU inference call."""
+        """Translate text strings. Chunks into small batches so peak memory
+        stays bounded on machines with limited RAM/VRAM. After each chunk,
+        intermediate tensors are released and the MPS cache is cleared to
+        prevent the process from being killed on large documents.
+        """
         if not self._model:
             raise RuntimeError('No model loaded')
         if not texts:
             return []
 
+        import gc
         import torch
 
-        # IndicProcessor handles sentence splitting and script normalization
+        all_results: list[str] = []
+        for i in range(0, len(texts), self._MAX_BATCH_SIZE):
+            chunk = texts[i:i + self._MAX_BATCH_SIZE]
+            all_results.extend(self._translate_chunk(chunk, src_lang, tgt_lang))
+            # Explicitly free intermediate tensors after each chunk
+            gc.collect()
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+
+        return all_results
+
+    def _translate_chunk(self, texts: list[str], src_lang: str, tgt_lang: str) -> list[str]:
+        """Run one GPU inference over a small list of texts."""
+        import torch
+
         batch = self._processor.preprocess_batch(
             texts, src_lang=src_lang, tgt_lang=tgt_lang
         )
@@ -219,9 +243,10 @@ class TranslationEngine:
             )
 
         decoded = self._tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        result = self._processor.postprocess_batch(
-            decoded, lang=tgt_lang
-        )
+        result = self._processor.postprocess_batch(decoded, lang=tgt_lang)
+
+        # Drop references so the memory is eligible for collection
+        del inputs, outputs, decoded, batch
         return result
 
     def translate_text(self, text: str, src_lang: str, tgt_lang: str) -> str:
@@ -270,7 +295,7 @@ class TranslationEngine:
         return result
 
     def _translate_content_list(self, blocks: list, src_lang: str, tgt_lang: str) -> None:
-        """Batch translate text/title blocks in a content_list-style array."""
+        """Translate text/title blocks one at a time to keep memory bounded."""
         text_indices: list[int] = []
         text_values: list[str] = []
         table_indices: list[int] = []
@@ -278,7 +303,6 @@ class TranslationEngine:
         for i, block in enumerate(blocks):
             block_type = block.get('type', '')
             if block_type in ('text', 'title', 'list', 'caption'):
-                # Support both 'text' and 'content' field names
                 text = block.get('text', '') or block.get('content', '')
                 if text and text.strip():
                     text_indices.append(i)
@@ -286,17 +310,21 @@ class TranslationEngine:
             elif block_type == 'table':
                 table_indices.append(i)
 
-        # Batch translate all text blocks in one inference call
+        # Process one block at a time so peak memory stays bounded
         if text_values:
-            translated = self.translate_texts(text_values, src_lang, tgt_lang)
-            for idx, trans in zip(text_indices, translated):
-                # Write back to whichever field exists
+            total = len(text_values)
+            logger.info('Translating %d text blocks region-by-region...', total)
+            for n, (idx, text) in enumerate(zip(text_indices, text_values), 1):
+                translated = self.translate_texts([text], src_lang, tgt_lang)
+                trans = translated[0] if translated else text
                 if 'text' in blocks[idx]:
                     blocks[idx]['text'] = trans
                 elif 'content' in blocks[idx]:
                     blocks[idx]['content'] = trans
                 else:
                     blocks[idx]['text'] = trans
+                if n % 5 == 0 or n == total:
+                    logger.info('  Translated %d/%d text blocks', n, total)
 
         # Handle table cells
         for idx in table_indices:
@@ -312,7 +340,7 @@ class TranslationEngine:
                     block['text'] = translated_html
 
     def _translate_regions(self, regions: list, src_lang: str, tgt_lang: str) -> None:
-        """Batch translate regions in OCR output pages format."""
+        """Translate regions one at a time to keep memory bounded."""
         text_indices: list[int] = []
         text_values: list[str] = []
         table_indices: list[int] = []
@@ -328,14 +356,19 @@ class TranslationEngine:
                 table_indices.append(i)
 
         if text_values:
-            translated = self.translate_texts(text_values, src_lang, tgt_lang)
-            for idx, trans in zip(text_indices, translated):
+            total = len(text_values)
+            logger.info('Translating %d text regions region-by-region...', total)
+            for n, (idx, text) in enumerate(zip(text_indices, text_values), 1):
+                translated = self.translate_texts([text], src_lang, tgt_lang)
+                trans = translated[0] if translated else text
                 if 'content' in regions[idx]:
                     regions[idx]['content'] = trans
                 elif 'text' in regions[idx]:
                     regions[idx]['text'] = trans
                 else:
                     regions[idx]['content'] = trans
+                if n % 5 == 0 or n == total:
+                    logger.info('  Translated %d/%d text regions', n, total)
 
         for idx in table_indices:
             region = regions[idx]
@@ -358,23 +391,13 @@ class TranslationEngine:
         soup = BeautifulSoup(html, 'html.parser')
         cells = soup.find_all(['td', 'th'])
 
-        # Collect all non-empty cell texts
-        cell_texts: list[tuple[int, str]] = []
-        for i, cell in enumerate(cells):
+        # Translate one cell at a time (same memory-safe strategy as text blocks)
+        for cell in cells:
             text = cell.get_text(strip=True)
             if text:
-                cell_texts.append((i, text))
-
-        if not cell_texts:
-            return html
-
-        # Batch translate all cell texts in one inference call
-        texts_to_translate = [t for _, t in cell_texts]
-        translated = self.translate_texts(texts_to_translate, src_lang, tgt_lang)
-
-        # Reinsert translated text
-        for (cell_idx, _), trans in zip(cell_texts, translated):
-            cells[cell_idx].string = trans
+                translated = self.translate_texts([text], src_lang, tgt_lang)
+                if translated:
+                    cell.string = translated[0]
 
         return str(soup)
 
