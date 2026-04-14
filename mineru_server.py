@@ -12,6 +12,7 @@ Usage:
 # transformers uses @docstring_decorator which calls inspect.getsource()
 # at class definition time. This fails in PyInstaller because .py source
 # files are not included in the bundle.
+import contextlib
 import inspect
 _original_getsource = inspect.getsource
 _original_getsourcelines = inspect.getsourcelines
@@ -653,6 +654,56 @@ def _detect_script(pdf_bytes: bytes) -> str:
     return 'en'
 
 
+@contextlib.contextmanager
+def _mfr_disabled_if(disable: bool):
+    """Temporarily stub MinerU's MFR model so it returns empty results.
+
+    MinerU's batch_analyze gates both MFD (detection) and MFR (LaTeX
+    recognition) under the same apply_formula flag — there's no public
+    config to run MFD without MFR. For formula_display='image' we only
+    need MFD (for bboxes to crop); MFR is a 0.5-3s-per-equation step on
+    MPS that's pure waste. This monkey-patches mfr_model.batch_predict
+    to a shape-matching no-op for the duration of the call, then restores.
+    """
+    if not disable:
+        yield
+        return
+
+    try:
+        from magic_pdf.model.sub_modules.model_init import AtomModelSingleton
+    except Exception:
+        yield
+        return
+
+    patched = []
+    try:
+        # MinerU caches model instances in AtomModelSingleton; patch each
+        # cached mfr_model we can find.
+        singleton = AtomModelSingleton()
+        for attr_name in ('_models', 'models'):
+            models = getattr(singleton, attr_name, None)
+            if not isinstance(models, dict):
+                continue
+            for key, model in models.items():
+                if not hasattr(model, 'batch_predict'):
+                    continue
+                # Heuristic: the MFR (UniMerNet) model lives under a key
+                # containing 'mfr' or is the only model with an mfr signature.
+                name = str(key).lower()
+                if 'mfr' not in name and 'unimernet' not in name and 'formula' not in name:
+                    continue
+                original = model.batch_predict
+                def _noop(images_mfd_res, images, batch_size=None, _orig=original):
+                    # Match the expected return shape: list-of-list-per-image
+                    return [[] for _ in images]
+                model.batch_predict = _noop
+                patched.append((model, original))
+        yield
+    finally:
+        for model, original in patched:
+            model.batch_predict = original
+
+
 def _crop_equation_images(pdf_bytes: bytes, pdf_info: list, image_writer):
     """Post-process MinerU results to crop equation spans from the PDF.
 
@@ -856,7 +907,14 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         # Serialized via _gpu_lock so concurrent documents don't thrash the GPU.
         # CPU-only stages (Steps 2+) run in parallel after GPU lock is released.
         formula_enable = config.get('formula_enable', False)
+        formula_display = config.get('formula_display', 'image')
         table_enable = config.get('table_display') != 'image'
+
+        # When the user wants formulas rendered as images (not as LaTeX),
+        # MFD is still required — we need the bounding boxes so _crop_equation_images
+        # can cut the formula pixels from the PDF — but MFR (UniMerNet) is pure
+        # waste and can take 10+ minutes on a math-heavy document. Patch it out.
+        skip_mfr = formula_enable and formula_display == 'image'
         t1 = time.time()
         logger.info('Waiting for GPU lock...', extra={'task_id': task_id})
         with _gpu_lock:
@@ -865,17 +923,20 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
             if wait_time > 0.1:
                 logger.info('GPU lock acquired after %.1fs wait', wait_time,
                             extra={'task_id': task_id})
-            infer_result = ds.apply(
-                doc_analyze,
-                ocr=True,
-                lang=ocr_lang,
-                formula_enable=formula_enable,
-                table_enable=table_enable,
-            )
+            with _mfr_disabled_if(skip_mfr):
+                infer_result = ds.apply(
+                    doc_analyze,
+                    ocr=True,
+                    lang=ocr_lang,
+                    formula_enable=formula_enable,
+                    table_enable=table_enable,
+                )
         # GPU lock released — next document can start inference immediately
         skipped = []
         if not formula_enable:
             skipped.append('UniMerNet (formula)')
+        elif skip_mfr:
+            skipped.append('UniMerNet (MFR bypassed — image-only display)')
         if not table_enable:
             skipped.append('table structure recognition')
         if skipped:
