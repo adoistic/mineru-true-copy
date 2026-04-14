@@ -63,34 +63,36 @@ export default function SettingsOverlay({
 
     async function fetchModelStatus() {
       try {
-        const res = await fetch("/api/translation/models");
-        if (!res.ok) {
+        // Check server health first
+        const healthRes = await fetch("/api/translation/health");
+        if (!healthRes.ok) {
           setTranslationServerOnline(false);
           return;
         }
-        const data = await res.json();
-        setTranslationServerOnline(data.available ?? false);
+        setTranslationServerOnline(true);
 
-        if (data.available) {
-          // If a model is loaded, mark it as ready
-          const newStatuses: Record<string, ModelStatus> = {
-            "1B": "not_downloaded",
-            "200M": "not_downloaded",
-          };
-          if (data.loaded?.variant) {
-            newStatuses[data.loaded.variant] = "ready";
-          }
-          // Merge with current statuses (preserve "downloading" state)
-          setModelStatuses((prev) => {
-            const merged = { ...newStatuses };
-            for (const key of Object.keys(prev)) {
-              if (prev[key] === "downloading") {
-                merged[key] = "downloading";
-              }
-            }
-            return merged;
-          });
+        const res = await fetch("/api/translation/models");
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Update model statuses regardless of IndicTransToolkit availability
+        const newStatuses: Record<string, ModelStatus> = {
+          "1B": "not_downloaded",
+          "200M": "not_downloaded",
+        };
+        if (data.loaded?.variant) {
+          newStatuses[data.loaded.variant] = "ready";
         }
+        // Merge with current statuses (preserve "downloading" state)
+        setModelStatuses((prev) => {
+          const merged = { ...newStatuses };
+          for (const key of Object.keys(prev)) {
+            if (prev[key] === "downloading") {
+              merged[key] = "downloading";
+            }
+          }
+          return merged;
+        });
       } catch {
         setTranslationServerOnline(false);
       }

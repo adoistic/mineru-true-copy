@@ -73,12 +73,21 @@ def _model_name(direction: str, variant: str) -> str:
 
     direction: "en-indic", "indic-en", or "indic-indic"
     variant: "1B" or "200M"
+
+    HuggingFace model IDs:
+      ai4bharat/indictrans2-en-indic-1B
+      ai4bharat/indictrans2-en-indic-dist-200M
+      ai4bharat/indictrans2-indic-en-1B
+      ai4bharat/indictrans2-indic-en-dist-200M
+      ai4bharat/indictrans2-indic-indic-1B
+      ai4bharat/indictrans2-indic-indic-dist-320M  (320M not 200M)
     """
-    # Model naming: ai4bharat/indictrans2-{direction}-{variant}-dist
-    # The 1B variant uses "1B-dist", 200M uses "200M-dist"
-    dir_slug = direction.replace('-', '_')  # en_indic, indic_en, indic_indic
-    # Actual HF naming: ai4bharat/indictrans2-en-indic-1B or -dist-200M
-    return f"ai4bharat/indictrans2-{direction}-{variant}-dist"
+    if variant == "1B":
+        return f"ai4bharat/indictrans2-{direction}-1B"
+    else:
+        # Distilled variants: 200M for en-indic/indic-en, 320M for indic-indic
+        size = "320M" if direction == "indic-indic" else "200M"
+        return f"ai4bharat/indictrans2-{direction}-dist-{size}"
 
 
 def is_available() -> bool:
@@ -203,7 +212,8 @@ class TranslationEngine:
         with torch.no_grad():
             outputs = self._model.generate(
                 **inputs, num_beams=5, max_length=256,
-                num_return_sequences=1
+                num_return_sequences=1,
+                use_cache=False,  # IndicTrans2 custom model incompatible with KV cache on transformers>=4.50
             )
 
         decoded = self._tokenizer.batch_decode(outputs, skip_special_tokens=True)
