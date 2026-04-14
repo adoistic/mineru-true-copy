@@ -255,8 +255,11 @@ class TranslationHandler(BaseHTTPRequestHandler):
         if parsed.path == '/health':
             from lib.translation import is_available, SUPPORTED_LANGUAGES
             engine = _get_engine()
+            # ready = server up AND default model loaded (for splash screen gating)
+            ready = bool(is_available() and engine.model_loaded)
             self._send_json(200, {
                 'status': 'ok',
+                'ready': ready,
                 'model_loaded': engine.model_loaded,
                 'model_direction': engine.model_direction,
                 'model_variant': engine.model_variant,
@@ -518,7 +521,29 @@ if __name__ == '__main__':
     watchdog = threading.Thread(target=_idle_watchdog, args=(server,), daemon=True)
     watchdog.start()
 
-    logger.info('Ready (idle timeout: %ds)', _IDLE_TIMEOUT)
+    # Pre-warm default model so the app doesn't need a first-request warmup.
+    # Set TRANSLATION_PREWARM=0 to skip (useful for dev).
+    prewarm = os.environ.get('TRANSLATION_PREWARM', '1') != '0'
+    prewarm_direction = os.environ.get('TRANSLATION_PREWARM_DIRECTION', 'en-indic')
+    prewarm_variant = os.environ.get('TRANSLATION_PREWARM_VARIANT', '200M')
+
+    def _prewarm():
+        try:
+            engine = _get_engine()
+            if not engine.is_available():
+                logger.warning('Skipping prewarm: IndicTrans2 not installed')
+                return
+            logger.info('Pre-warming model: %s %s', prewarm_direction, prewarm_variant)
+            with _engine_lock:
+                engine.load_model(prewarm_direction, prewarm_variant)
+            logger.info('Pre-warm complete')
+        except Exception as e:
+            logger.warning('Pre-warm failed: %s', e)
+
+    if prewarm:
+        threading.Thread(target=_prewarm, daemon=True).start()
+
+    logger.info('Ready (idle timeout: %ds, prewarm: %s)', _IDLE_TIMEOUT, prewarm)
 
     try:
         server_thread.join()

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import ActivationScreen from "@/components/layout/ActivationScreen";
+import SplashScreen from "@/components/layout/SplashScreen";
 import SettingsOverlay from "@/components/settings/SettingsOverlay";
 import OcrTool from "@/components/tools/OcrTool";
 import ExtractionTool from "@/components/tools/ExtractionTool";
@@ -79,6 +80,7 @@ const TOOLS: ToolDef[] = [
 export default function Home() {
   const [keyId, setKeyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [enginesReady, setEnginesReady] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolId>("ocr");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [creditBalance, setCreditBalance] = useState(0);
@@ -164,6 +166,10 @@ export default function Home() {
 
   if (!keyId) {
     return <ActivationScreen onActivated={handleActivated} />;
+  }
+
+  if (!enginesReady) {
+    return <SplashScreen onReady={() => setEnginesReady(true)} />;
   }
 
   const statusDotColor =
