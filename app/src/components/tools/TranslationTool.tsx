@@ -419,10 +419,15 @@ export default function TranslationTool() {
             bodyPayload.file_name = fileName;
           }
 
+          // 45-min abort matches the Next.js → Python AbortSignal. Without
+          // this, WKWebView's default HTTP timeout (~60s) kills the fetch
+          // while the server is still translating a large doc, surfacing as
+          // "Load failed" in the UI.
           const res = await fetch("/api/translation/translate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(bodyPayload),
+            signal: AbortSignal.timeout(45 * 60 * 1000),
           });
 
           if (!res.ok) {
