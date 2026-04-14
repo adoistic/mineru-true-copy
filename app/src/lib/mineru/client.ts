@@ -1,6 +1,18 @@
 import { MineruOutput } from '@/types';
 import fs from 'fs';
 import path from 'path';
+import { Agent, fetch as undiciFetch } from 'undici';
+
+// undici (Node's built-in fetch implementation) defaults bodyTimeout to
+// 5 minutes — if the upstream is silent for that long, the connection
+// is aborted. For long-running translations (~14 min on math-heavy docs)
+// that's catastrophic. This dispatcher disables both header and body
+// timeouts so we can wait as long as the upstream needs.
+const LONG_RUNNING_DISPATCHER = new Agent({
+  headersTimeout: 0,
+  bodyTimeout: 0,
+  keepAliveTimeout: 60_000,
+});
 
 const HEALTH_CHECK_INTERVAL_MS = 30000;
 const STARTUP_TIMEOUT_MS = 60000;
@@ -372,7 +384,11 @@ export async function submitTranslation(
   tgtLang: string,
   modelVariant: string = '1B',
 ): Promise<{ translated_json: Record<string, unknown>; duration_ms: number }> {
-  const response = await fetch(`${TRANSLATION_SERVER_URL}/translate`, {
+  // undici's default bodyTimeout (5 min) kills the connection during long
+  // translations. Use LONG_RUNNING_DISPATCHER (no body/header timeout).
+  // Cast: undici's fetch type is structurally compatible with global fetch
+  // but TypeScript doesn't see them as identical because of subtype drift.
+  const response = await undiciFetch(`${TRANSLATION_SERVER_URL}/translate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -381,17 +397,17 @@ export async function submitTranslation(
       tgt_lang: tgtLang,
       model_variant: modelVariant,
     }),
-    // 45 min: a 30-page math paper with 280+ regions can take 14 min on MPS;
-    // giving headroom for larger docs. Past this, users should split the file.
+    dispatcher: LONG_RUNNING_DISPATCHER,
+    // Belt + suspenders: total budget cap. 45 min covers any realistic doc.
     signal: AbortSignal.timeout(45 * 60 * 1000),
   });
 
   if (!response.ok) {
-    const data = await response.json().catch(() => ({ error: 'Unknown error' }));
+    const data = await response.json().catch(() => ({ error: 'Unknown error' })) as { error?: string };
     throw new Error(data.error || `Translation failed: ${response.status}`);
   }
 
-  return response.json();
+  return (await response.json()) as { translated_json: Record<string, unknown>; duration_ms: number };
 }
 
 export async function submitTranslationBatch(
