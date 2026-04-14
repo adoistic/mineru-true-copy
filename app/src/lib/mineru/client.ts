@@ -381,7 +381,9 @@ export async function submitTranslation(
       tgt_lang: tgtLang,
       model_variant: modelVariant,
     }),
-    signal: AbortSignal.timeout(600000), // 10 min for large docs
+    // 45 min: a 30-page math paper with 280+ regions can take 14 min on MPS;
+    // giving headroom for larger docs. Past this, users should split the file.
+    signal: AbortSignal.timeout(45 * 60 * 1000),
   });
 
   if (!response.ok) {
