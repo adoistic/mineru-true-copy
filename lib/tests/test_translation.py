@@ -37,8 +37,12 @@ def _make_mock_modules():
     mock_model.generate.side_effect = lambda **kw: [[1, 2, 3]] * state['batch_size']
 
     mock_tokenizer = mock.MagicMock()
-    mock_tokenizer.return_value = mock.MagicMock()
-    mock_tokenizer.return_value.to.return_value = mock_tokenizer.return_value
+    _tokenizer_inputs = mock.MagicMock()
+    # input_ids.shape[1] must return a concrete int so _translate_chunk's
+    # max_new_tokens math works under mocks.
+    _tokenizer_inputs.__getitem__ = lambda self, key: mock.MagicMock(shape=(1, 16))
+    _tokenizer_inputs.to.return_value = _tokenizer_inputs
+    mock_tokenizer.return_value = _tokenizer_inputs
     mock_tokenizer.batch_decode.side_effect = lambda outputs, **kw: ['translated text'] * len(outputs)
 
     mock_auto_model = mock.MagicMock()

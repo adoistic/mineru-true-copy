@@ -238,17 +238,21 @@ class TranslationEngine:
         if total_gb is None:
             total_gb = 8.0  # Conservative default if we can't tell
 
-        # Tiers — batch_size × num_beams controls peak memory.
+        # Tiers — batch_size × num_beams controls peak memory AND speed.
+        # IndicTrans2 has use_cache=False (custom model, transformers>=4.50 incompat),
+        # so every decode step is O(n^2). num_beams=5 × max_length=256 is
+        # catastrophically slow on MPS (minutes per batch). Greedy decoding
+        # (num_beams=1) is ~5x faster with only a small quality hit — worth it.
         if total_gb >= 32:
-            bs, nb = 16, 5          # Plenty of headroom, max quality
+            bs, nb = 16, 1
         elif total_gb >= 24:
-            bs, nb = 8, 5           # 24 GB Mac: healthy batches, full beam width
+            bs, nb = 8, 1
         elif total_gb >= 16:
-            bs, nb = 4, 5           # 16 GB min target: moderate batches
+            bs, nb = 4, 1
         elif total_gb >= 8:
-            bs, nb = 2, 4           # 8 GB: safer batches, slightly fewer beams
+            bs, nb = 2, 1
         else:
-            bs, nb = 1, 3           # <8 GB: strictly one at a time, fewer beams
+            bs, nb = 1, 1
 
         if env_bs:
             bs = int(env_bs)
@@ -298,15 +302,12 @@ class TranslationEngine:
     def _translate_chunk(self, texts: list[str], src_lang: str, tgt_lang: str, num_beams: int) -> list[str]:
         """Run one GPU inference over a list of texts.
 
-        CRITICAL for MPS performance: pad every chunk to a fixed shape
-        (batch_size x 256). MPS caches the compiled generation graph per
-        input shape; with padding='longest' every chunk gets a different
-        sequence length, each triggering a 30-60 s recompile on Apple
-        Silicon. padding='max_length' with a constant max_length makes
-        every chunk the same shape, so MPS compiles once and reuses.
-        Padded-up chunks shorter than the max are a small constant-factor
-        waste (~2-3x slower per tiny sentence) but VASTLY faster overall
-        than recompiling on every chunk.
+        Because IndicTrans2 runs with use_cache=False (custom model isn't
+        KV-cache compatible on transformers>=4.50), every generation step
+        is O(input_len + output_so_far)^2. Padding to a fixed 256 would
+        make every short sentence pay the full cost — catastrophically
+        slow. Instead we use padding='longest' so short batches stay
+        short, and cap generation at a reasonable max_new_tokens.
         """
         import torch
 
@@ -315,14 +316,21 @@ class TranslationEngine:
         )
         inputs = self._tokenizer(
             batch, return_tensors='pt',
-            padding='max_length', truncation=True,
+            padding='longest', truncation=True,
             max_length=256,
         ).to(self._device)
 
+        # Cap new tokens at ~2x the input length so short inputs finish fast.
+        input_len = inputs['input_ids'].shape[1]
+        max_new = min(256, max(48, input_len * 2))
+
         with torch.no_grad():
             outputs = self._model.generate(
-                **inputs, num_beams=num_beams, max_length=256,
+                **inputs,
+                num_beams=num_beams,
+                max_new_tokens=max_new,
                 num_return_sequences=1,
+                early_stopping=(num_beams > 1),
                 use_cache=False,  # IndicTrans2 custom model incompatible with KV cache on transformers>=4.50
             )
 
