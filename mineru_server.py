@@ -2322,9 +2322,13 @@ def _join_lines_for_html(block: dict, img_dir: str = '',
         for span in line.get('spans', []):
             span_type = span.get('type', '')
             content = span.get('content', '').strip()
-            if not content:
+            is_eq = span_type in (CT.InterlineEquation, CT.InlineEquation)
+            # For equation spans we may have no LaTeX content (MFR bypassed)
+            # but still have a cropped image_path — keep going so we can
+            # embed the image. For non-equation spans empty content is junk.
+            if not content and not (is_eq and span.get('image_path')):
                 continue
-            if span_type in (CT.InterlineEquation, CT.InlineEquation):
+            if is_eq:
                 # Check for false positive: MinerU misclassifies number+unit
                 # patterns (e.g. "10-50 Km", "150 mm") as inline equations.
                 if _is_false_positive_equation(content):
