@@ -193,16 +193,18 @@ class TranslationEngine:
 
         logger.info('Model unloaded')
 
-    def translate_text(self, text: str, src_lang: str, tgt_lang: str) -> str:
-        """Translate a single text string."""
+    def translate_texts(self, texts: list[str], src_lang: str, tgt_lang: str) -> list[str]:
+        """Translate a batch of text strings in one GPU inference call."""
         if not self._model:
             raise RuntimeError('No model loaded')
+        if not texts:
+            return []
 
         import torch
 
         # IndicProcessor handles sentence splitting and script normalization
         batch = self._processor.preprocess_batch(
-            [text], src_lang=src_lang, tgt_lang=tgt_lang
+            texts, src_lang=src_lang, tgt_lang=tgt_lang
         )
         inputs = self._tokenizer(
             batch, return_tensors='pt', padding=True, truncation=True,
@@ -220,15 +222,18 @@ class TranslationEngine:
         result = self._processor.postprocess_batch(
             decoded, lang=tgt_lang
         )
+        return result
+
+    def translate_text(self, text: str, src_lang: str, tgt_lang: str) -> str:
+        """Translate a single text string. Wrapper around translate_texts."""
+        result = self.translate_texts([text], src_lang, tgt_lang)
         return result[0] if result else text
 
     def translate_json(self, json_data: dict, src_lang: str, tgt_lang: str) -> dict:
         """Translate text fields in OCR JSON, preserving all structural fields.
 
-        Translates text in content_list blocks:
-        - text blocks: translates the 'text' field
-        - table blocks: extracts text from each <td>/<th>, translates, reinserts
-        - Other block types (image, figure, equation): preserved as-is
+        Batches ALL text/title blocks into one GPU inference call for speed.
+        Table cells are batched separately.
 
         Preserved fields: bbox, type, font_size, font_name, lines, page_idx, etc.
         """
@@ -246,31 +251,44 @@ class TranslationEngine:
                 f'but {needed_dir} is needed for {src_lang} -> {tgt_lang}'
             )
 
-        for block in content_list:
-            block_type = block.get('type', '')
+        # Phase 1: Collect all text/title blocks for batch translation
+        text_indices: list[int] = []
+        text_values: list[str] = []
+        table_indices: list[int] = []
 
+        for i, block in enumerate(content_list):
+            block_type = block.get('type', '')
             if block_type in ('text', 'title'):
                 text = block.get('text', '')
                 if text and text.strip():
-                    block['text'] = self.translate_text(text, src_lang, tgt_lang)
-
+                    text_indices.append(i)
+                    text_values.append(text)
             elif block_type == 'table':
-                html = block.get('text', '') or block.get('html', '')
-                if html and html.strip():
-                    translated_html = self._translate_table_html(
-                        html, src_lang, tgt_lang
-                    )
-                    if 'text' in block:
-                        block['text'] = translated_html
-                    if 'html' in block:
-                        block['html'] = translated_html
+                table_indices.append(i)
 
-            # image, figure, equation, interline_equation — no text to translate
+        # Phase 2: Batch translate all text/title blocks in one inference call
+        if text_values:
+            translated = self.translate_texts(text_values, src_lang, tgt_lang)
+            for idx, trans in zip(text_indices, translated):
+                content_list[idx]['text'] = trans
+
+        # Phase 3: Handle table cells (batch all cell texts together)
+        for idx in table_indices:
+            block = content_list[idx]
+            html = block.get('text', '') or block.get('html', '')
+            if html and html.strip():
+                translated_html = self._translate_table_html(
+                    html, src_lang, tgt_lang
+                )
+                if 'text' in block:
+                    block['text'] = translated_html
+                if 'html' in block:
+                    block['html'] = translated_html
 
         return result
 
     def _translate_table_html(self, html: str, src_lang: str, tgt_lang: str) -> str:
-        """Extract text from table cells, translate individually, reinsert."""
+        """Extract text from table cells, batch translate, reinsert."""
         try:
             from bs4 import BeautifulSoup
         except ImportError:
@@ -280,11 +298,23 @@ class TranslationEngine:
         soup = BeautifulSoup(html, 'html.parser')
         cells = soup.find_all(['td', 'th'])
 
-        for cell in cells:
+        # Collect all non-empty cell texts
+        cell_texts: list[tuple[int, str]] = []
+        for i, cell in enumerate(cells):
             text = cell.get_text(strip=True)
             if text:
-                translated = self.translate_text(text, src_lang, tgt_lang)
-                cell.string = translated
+                cell_texts.append((i, text))
+
+        if not cell_texts:
+            return html
+
+        # Batch translate all cell texts in one inference call
+        texts_to_translate = [t for _, t in cell_texts]
+        translated = self.translate_texts(texts_to_translate, src_lang, tgt_lang)
+
+        # Reinsert translated text
+        for (cell_idx, _), trans in zip(cell_texts, translated):
+            cells[cell_idx].string = trans
 
         return str(soup)
 
