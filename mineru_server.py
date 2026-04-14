@@ -656,14 +656,20 @@ def _detect_script(pdf_bytes: bytes) -> str:
 
 @contextlib.contextmanager
 def _mfr_disabled_if(disable: bool):
-    """Temporarily stub MinerU's MFR model so it returns empty results.
+    """Temporarily patch MinerU's MFR so it emits formula bboxes without
+    running UniMerNet's LaTeX inference.
 
     MinerU's batch_analyze gates both MFD (detection) and MFR (LaTeX
-    recognition) under the same apply_formula flag — there's no public
-    config to run MFD without MFR. For formula_display='image' we only
-    need MFD (for bboxes to crop); MFR is a 0.5-3s-per-equation step on
-    MPS that's pure waste. This monkey-patches mfr_model.batch_predict
-    to a shape-matching no-op for the duration of the call, then restores.
+    recognition) under the same apply_formula flag. For formula_display='image'
+    we need the formula bboxes (so downstream pipe_ocr_mode creates equation
+    spans and _crop_equation_images can cut them as images) — we just don't
+    need the 1-2s-per-equation UniMerNet call.
+
+    This replaces mfr_model.batch_predict with a shape-matching stub that
+    builds the same formula_list batch_predict would have built, but with
+    latex="". That preserves the full downstream structure (equation spans
+    in pdf_info → our post-processor crops PNGs → base64-embedded in output)
+    while skipping the expensive inference.
     """
     if not disable:
         yield
@@ -675,10 +681,30 @@ def _mfr_disabled_if(disable: bool):
         yield
         return
 
+    def _bbox_only_batch_predict(images_mfd_res, images, batch_size=None):
+        """Replicate batch_predict's bbox-harvesting, skip UniMerNet inference."""
+        out = []
+        for mfd_res in images_mfd_res:
+            formula_list = []
+            try:
+                for xyxy, conf, cla in zip(
+                    mfd_res.boxes.xyxy, mfd_res.boxes.conf, mfd_res.boxes.cls,
+                ):
+                    xmin, ymin, xmax, ymax = [int(p.item()) for p in xyxy]
+                    formula_list.append({
+                        'category_id': 13 + int(cla.item()),
+                        'poly': [xmin, ymin, xmax, ymin,
+                                 xmax, ymax, xmin, ymax],
+                        'score': round(float(conf.item()), 2),
+                        'latex': '',
+                    })
+            except Exception as e:
+                logger.warning('MFR bypass: failed to harvest bboxes: %s', e)
+            out.append(formula_list)
+        return out
+
     patched = []
     try:
-        # MinerU caches model instances in AtomModelSingleton; patch each
-        # cached mfr_model we can find.
         singleton = AtomModelSingleton()
         for attr_name in ('_models', 'models'):
             models = getattr(singleton, attr_name, None)
@@ -687,16 +713,11 @@ def _mfr_disabled_if(disable: bool):
             for key, model in models.items():
                 if not hasattr(model, 'batch_predict'):
                     continue
-                # Heuristic: the MFR (UniMerNet) model lives under a key
-                # containing 'mfr' or is the only model with an mfr signature.
                 name = str(key).lower()
                 if 'mfr' not in name and 'unimernet' not in name and 'formula' not in name:
                     continue
                 original = model.batch_predict
-                def _noop(images_mfd_res, images, batch_size=None, _orig=original):
-                    # Match the expected return shape: list-of-list-per-image
-                    return [[] for _ in images]
-                model.batch_predict = _noop
+                model.batch_predict = _bbox_only_batch_predict
                 patched.append((model, original))
         yield
     finally:
