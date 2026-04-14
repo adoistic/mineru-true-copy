@@ -56,10 +56,11 @@ which requires `OPENROUTER_API_KEY`. Without it, all OCR silently fails and outp
 Use: `export $(grep -v '^#' .env | grep -v '^\s*$' | xargs)` from the project root.
 
 1. **MinerU server** (Python sidecar): `./test-venv/bin/python mineru_server.py --port <random>`
-2. **Next.js main app**: `MINERU_API_URL="http://localhost:<mineru_port>" npx next dev --port <random>` (from `app/`)
-3. **Admin app**: `npx next dev --port <random>` (from `admin/`)
-4. **Tauri desktop app**: `cargo tauri dev` (from project root, after Next.js is up)
-5. **Open browser tabs** for the main app and admin app
+2. **Translation server** (Python sidecar): `./test-venv/bin/python translation_server.py --port <random>`
+3. **Next.js main app**: `MINERU_API_URL="http://localhost:<mineru_port>" TRANSLATION_API_URL="http://localhost:<translation_port>" npx next dev --port <random>` (from `app/`)
+4. **Admin app**: `npx next dev --port <random>` (from `admin/`)
+5. **Tauri desktop app**: `cargo tauri dev` (from project root, after Next.js is up)
+6. **Open browser tabs** for the main app and admin app
 
 Use random high ports (49152-65000) for all services to avoid conflicts.
 Use `localhost` (not `127.0.0.1`) for all URLs — Firebase Auth authorizes `localhost` by default.
