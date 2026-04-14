@@ -437,15 +437,44 @@ export default function TranslationTool() {
   // RENDER: Completed state
   // ---------------------------------------------------------------------------
   if (completed) {
+    const allFailed = translatedResults.length === 0;
+    const partialFailure = !allFailed && error !== null;
+
     return (
       <div className="space-y-4">
         <h2 className="text-[16px] font-semibold" style={{ color: "var(--text-primary)" }}>
-          Translation Complete
+          {allFailed ? "Translation Failed" : partialFailure ? "Translation Partially Complete" : "Translation Complete"}
         </h2>
 
+        {allFailed ? (
+          <div
+            className="rounded p-5"
+            style={{ background: "var(--error-muted)", border: "1px solid rgba(244,63,94,0.2)" }}
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} style={{ color: "var(--error)" }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M4.93 4.93l14.14 14.14M12 3a9 9 0 100 18 9 9 0 000-18z" />
+              </svg>
+              <span className="text-[13px] font-medium" style={{ color: "var(--error)" }}>
+                {error || "Translation failed for all selected languages."}
+              </span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={handleReset}
+                className="rounded px-3 py-1.5 text-[13px] font-semibold transition-colors"
+                style={{ background: "var(--accent)", color: "var(--text-inverse)" }}
+                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--accent-hover)"; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--accent)"; }}
+              >
+                Try Again
+              </button>
+            </div>
+          </div>
+        ) : (
         <div
           className="rounded p-5"
-          style={{ background: "var(--success-muted)", border: "1px solid rgba(16,185,129,0.2)" }}
+          style={{ background: partialFailure ? "var(--warning-muted)" : "var(--success-muted)", border: partialFailure ? "1px solid rgba(245,158,11,0.2)" : "1px solid rgba(16,185,129,0.2)" }}
         >
           <div className="mb-3 flex items-center gap-2">
             <svg
@@ -454,12 +483,13 @@ export default function TranslationTool() {
               viewBox="0 0 24 24"
               stroke="currentColor"
               strokeWidth={2}
-              style={{ color: "var(--success)" }}
+              style={{ color: partialFailure ? "var(--warning)" : "var(--success)" }}
             >
               <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
             </svg>
-            <span className="text-[13px] font-medium" style={{ color: "var(--success)" }}>
+            <span className="text-[13px] font-medium" style={{ color: partialFailure ? "var(--warning)" : "var(--success)" }}>
               Translated to {translatedResults.length} language{translatedResults.length !== 1 ? "s" : ""} successfully
+              {partialFailure && ` (${progressTotal - translatedResults.length} failed)`}
             </span>
           </div>
 
@@ -494,6 +524,7 @@ export default function TranslationTool() {
             </button>
           </div>
         </div>
+        )}
 
         {/* Preview section */}
         {translatedResults.length > 0 && (
@@ -556,7 +587,8 @@ export default function TranslationTool() {
           </div>
         )}
 
-        {error && (
+        {/* Partial-failure error hint (only when some succeeded but some failed) */}
+        {!allFailed && error && (
           <p
             className="rounded p-3 text-[13px]"
             style={{ background: "var(--error-muted)", color: "var(--error)" }}

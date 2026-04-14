@@ -21,7 +21,7 @@ import threading
 import time
 import traceback
 import uuid
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse
 
 
@@ -360,7 +360,16 @@ class TranslationHandler(BaseHTTPRequestHandler):
             needed_dir = _infer_direction(src_lang, tgt_lang)
 
             with _engine_lock:
-                if not engine.model_loaded or engine.model_direction != needed_dir:
+                # Reload the model if EITHER the direction OR the variant differs.
+                # Previously only direction was checked, so switching between
+                # Standard (200M) and High Accuracy (1B) on the same direction
+                # silently continued running the old variant.
+                needs_reload = (
+                    not engine.model_loaded
+                    or engine.model_direction != needed_dir
+                    or engine.model_variant != model_variant
+                )
+                if needs_reload:
                     engine.load_model(needed_dir, model_variant)
 
                 start = time.time()
@@ -509,7 +518,10 @@ if __name__ == '__main__':
     sys.stderr = StreamToLogger(logger, logging.WARNING)
 
     # Start HTTP server
-    server = HTTPServer(('127.0.0.1', args.port), TranslationHandler)
+    # ThreadingHTTPServer: each request on its own thread so health checks
+    # remain responsive while a long translation is running on the GPU.
+    # _engine_lock still serializes actual model inference.
+    server = ThreadingHTTPServer(('127.0.0.1', args.port), TranslationHandler)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     logger.info('Listening on http://127.0.0.1:%d', args.port)
