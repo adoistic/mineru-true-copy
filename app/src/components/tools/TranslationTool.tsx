@@ -435,7 +435,14 @@ export default function TranslationTool() {
             throw new Error(data?.error ?? `Translation failed for ${LANG_LABELS[tgtLang]}`);
           }
 
+          // Route streams keepalive whitespace + final JSON; res.json() parses
+          // fine because leading whitespace is valid before a JSON value.
+          // Errors come back as status 200 with { error } in the body (the
+          // stream can't flip status mid-flight).
           const data = await res.json();
+          if (data?.error) {
+            throw new Error(data.error);
+          }
           // For preview we keep the LAST file's translations (folder mode)
           // or the only file's (file mode).
           results.push({ lang: tgtLang, data: data.translated_json });
