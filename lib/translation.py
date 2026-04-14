@@ -193,16 +193,78 @@ class TranslationEngine:
 
         logger.info('Model unloaded')
 
-    # Max strings per GPU inference call. Larger batches are faster but consume
-    # more memory (especially with num_beams=5 and seq_len=256 on MPS). 1 keeps
-    # memory bounded so large documents don't trigger macOS jetsam kills.
-    _MAX_BATCH_SIZE = 1
+    @staticmethod
+    def _auto_tune() -> tuple[int, int]:
+        """Pick (batch_size, num_beams) based on available system RAM.
+
+        Rationale: a 200M model + num_beams=5 + seq_len=256 consumes roughly
+        50 MB per text per beam. On a shared 16 GB Mac (with MinerU + browser
+        + OS eating ~8 GB) we need small batches; on a 24 GB+ Mac we can be
+        more aggressive. Users can always override with env vars.
+
+        The MPS graph is recompiled if batch size changes, so we do NOT
+        call empty_cache() between inferences — gc.collect() is enough.
+        """
+        env_bs = os.environ.get('TRANSLATION_BATCH_SIZE')
+        env_nb = os.environ.get('TRANSLATION_NUM_BEAMS')
+        if env_bs and env_nb:
+            return int(env_bs), int(env_nb)
+
+        # Probe total system memory (physical RAM)
+        total_gb = None
+        try:
+            import psutil  # type: ignore
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception:
+            # Fallback: sysctl on macOS / meminfo on Linux
+            try:
+                import subprocess
+                if sys.platform == 'darwin':
+                    out = subprocess.run(
+                        ['sysctl', '-n', 'hw.memsize'],
+                        capture_output=True, text=True, timeout=2,
+                    )
+                    total_gb = int(out.stdout.strip()) / (1024 ** 3)
+                elif sys.platform.startswith('linux'):
+                    with open('/proc/meminfo') as f:
+                        for line in f:
+                            if line.startswith('MemTotal:'):
+                                kb = int(line.split()[1])
+                                total_gb = kb / (1024 ** 2)
+                                break
+            except Exception:
+                pass
+
+        if total_gb is None:
+            total_gb = 8.0  # Conservative default if we can't tell
+
+        # Tiers — batch_size × num_beams controls peak memory.
+        if total_gb >= 32:
+            bs, nb = 16, 5          # Plenty of headroom, max quality
+        elif total_gb >= 24:
+            bs, nb = 8, 5           # 24 GB Mac: healthy batches, full beam width
+        elif total_gb >= 16:
+            bs, nb = 4, 5           # 16 GB min target: moderate batches
+        elif total_gb >= 8:
+            bs, nb = 2, 4           # 8 GB: safer batches, slightly fewer beams
+        else:
+            bs, nb = 1, 3           # <8 GB: strictly one at a time, fewer beams
+
+        if env_bs:
+            bs = int(env_bs)
+        if env_nb:
+            nb = int(env_nb)
+        return bs, nb
 
     def translate_texts(self, texts: list[str], src_lang: str, tgt_lang: str) -> list[str]:
-        """Translate text strings. Chunks into small batches so peak memory
-        stays bounded on machines with limited RAM/VRAM. After each chunk,
-        intermediate tensors are released and the MPS cache is cleared to
-        prevent the process from being killed on large documents.
+        """Translate text strings. Chunked to keep peak memory bounded without
+        thrashing the MPS graph cache — an empty_cache() between inferences
+        forces expensive recompiles, so we let the cache persist across chunks
+        and only run gc.collect() to reclaim Python-side references.
+
+        Batch size and beam count are auto-tuned on first use based on
+        available system RAM; override with TRANSLATION_BATCH_SIZE /
+        TRANSLATION_NUM_BEAMS env vars.
         """
         if not self._model:
             raise RuntimeError('No model loaded')
@@ -210,21 +272,24 @@ class TranslationEngine:
             return []
 
         import gc
-        import torch
+
+        bs, nb = self._auto_tune()
+        if not getattr(self, '_logged_tune', False):
+            logger.info(
+                'Translation tuning: batch_size=%d, num_beams=%d', bs, nb,
+            )
+            self._logged_tune = True
 
         all_results: list[str] = []
-        for i in range(0, len(texts), self._MAX_BATCH_SIZE):
-            chunk = texts[i:i + self._MAX_BATCH_SIZE]
-            all_results.extend(self._translate_chunk(chunk, src_lang, tgt_lang))
-            # Explicitly free intermediate tensors after each chunk
+        for i in range(0, len(texts), bs):
+            chunk = texts[i:i + bs]
+            all_results.extend(self._translate_chunk(chunk, src_lang, tgt_lang, nb))
             gc.collect()
-            if torch.backends.mps.is_available():
-                torch.mps.empty_cache()
 
         return all_results
 
-    def _translate_chunk(self, texts: list[str], src_lang: str, tgt_lang: str) -> list[str]:
-        """Run one GPU inference over a small list of texts."""
+    def _translate_chunk(self, texts: list[str], src_lang: str, tgt_lang: str, num_beams: int) -> list[str]:
+        """Run one GPU inference over a list of texts."""
         import torch
 
         batch = self._processor.preprocess_batch(
@@ -237,7 +302,7 @@ class TranslationEngine:
 
         with torch.no_grad():
             outputs = self._model.generate(
-                **inputs, num_beams=5, max_length=256,
+                **inputs, num_beams=num_beams, max_length=256,
                 num_return_sequences=1,
                 use_cache=False,  # IndicTrans2 custom model incompatible with KV cache on transformers>=4.50
             )
@@ -295,7 +360,8 @@ class TranslationEngine:
         return result
 
     def _translate_content_list(self, blocks: list, src_lang: str, tgt_lang: str) -> None:
-        """Translate text/title blocks one at a time to keep memory bounded."""
+        """Translate text/title blocks. translate_texts chunks internally
+        based on available RAM."""
         text_indices: list[int] = []
         text_values: list[str] = []
         table_indices: list[int] = []
@@ -310,21 +376,16 @@ class TranslationEngine:
             elif block_type == 'table':
                 table_indices.append(i)
 
-        # Process one block at a time so peak memory stays bounded
         if text_values:
-            total = len(text_values)
-            logger.info('Translating %d text blocks region-by-region...', total)
-            for n, (idx, text) in enumerate(zip(text_indices, text_values), 1):
-                translated = self.translate_texts([text], src_lang, tgt_lang)
-                trans = translated[0] if translated else text
+            logger.info('Translating %d text blocks...', len(text_values))
+            translated = self.translate_texts(text_values, src_lang, tgt_lang)
+            for idx, trans in zip(text_indices, translated):
                 if 'text' in blocks[idx]:
                     blocks[idx]['text'] = trans
                 elif 'content' in blocks[idx]:
                     blocks[idx]['content'] = trans
                 else:
                     blocks[idx]['text'] = trans
-                if n % 5 == 0 or n == total:
-                    logger.info('  Translated %d/%d text blocks', n, total)
 
         # Handle table cells
         for idx in table_indices:
@@ -340,7 +401,7 @@ class TranslationEngine:
                     block['text'] = translated_html
 
     def _translate_regions(self, regions: list, src_lang: str, tgt_lang: str) -> None:
-        """Translate regions one at a time to keep memory bounded."""
+        """Translate regions. translate_texts chunks internally based on RAM."""
         text_indices: list[int] = []
         text_values: list[str] = []
         table_indices: list[int] = []
@@ -356,19 +417,15 @@ class TranslationEngine:
                 table_indices.append(i)
 
         if text_values:
-            total = len(text_values)
-            logger.info('Translating %d text regions region-by-region...', total)
-            for n, (idx, text) in enumerate(zip(text_indices, text_values), 1):
-                translated = self.translate_texts([text], src_lang, tgt_lang)
-                trans = translated[0] if translated else text
+            logger.info('Translating %d text regions...', len(text_values))
+            translated = self.translate_texts(text_values, src_lang, tgt_lang)
+            for idx, trans in zip(text_indices, translated):
                 if 'content' in regions[idx]:
                     regions[idx]['content'] = trans
                 elif 'text' in regions[idx]:
                     regions[idx]['text'] = trans
                 else:
                     regions[idx]['content'] = trans
-                if n % 5 == 0 or n == total:
-                    logger.info('  Translated %d/%d text regions', n, total)
 
         for idx in table_indices:
             region = regions[idx]
@@ -391,13 +448,19 @@ class TranslationEngine:
         soup = BeautifulSoup(html, 'html.parser')
         cells = soup.find_all(['td', 'th'])
 
-        # Translate one cell at a time (same memory-safe strategy as text blocks)
+        # Collect all non-empty cells, batch translate, reinsert
+        cell_refs = []
+        cell_texts = []
         for cell in cells:
             text = cell.get_text(strip=True)
             if text:
-                translated = self.translate_texts([text], src_lang, tgt_lang)
-                if translated:
-                    cell.string = translated[0]
+                cell_refs.append(cell)
+                cell_texts.append(text)
+
+        if cell_texts:
+            translated = self.translate_texts(cell_texts, src_lang, tgt_lang)
+            for cell, trans in zip(cell_refs, translated):
+                cell.string = trans
 
         return str(soup)
 

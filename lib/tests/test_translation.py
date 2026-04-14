@@ -26,15 +26,20 @@ def _make_mock_modules():
         __exit__=mock.MagicMock(return_value=False),
     )
 
+    # Track the current batch size via preprocess_batch (last call wins), so
+    # downstream mocks (generate, batch_decode, postprocess_batch) can return
+    # the right number of items.
+    state = {'batch_size': 1}
+
     mock_model = mock.MagicMock()
     mock_model.eval.return_value = mock_model
     mock_model.to.return_value = mock_model
-    mock_model.generate.return_value = [[1, 2, 3]]
+    mock_model.generate.side_effect = lambda **kw: [[1, 2, 3]] * state['batch_size']
 
     mock_tokenizer = mock.MagicMock()
     mock_tokenizer.return_value = mock.MagicMock()
     mock_tokenizer.return_value.to.return_value = mock_tokenizer.return_value
-    mock_tokenizer.batch_decode.return_value = ['translated text']
+    mock_tokenizer.batch_decode.side_effect = lambda outputs, **kw: ['translated text'] * len(outputs)
 
     mock_auto_model = mock.MagicMock()
     mock_auto_model.from_pretrained.return_value = mock_model
@@ -47,8 +52,13 @@ def _make_mock_modules():
     mock_transformers.AutoTokenizer = mock_auto_tokenizer
 
     mock_processor = mock.MagicMock()
-    mock_processor.preprocess_batch.return_value = ['preprocessed text']
-    mock_processor.postprocess_batch.return_value = ['translated output']
+    # Preprocess records the batch size so generate/batch_decode return
+    # the correct number of rows.
+    def _preprocess(texts, **kw):
+        state['batch_size'] = len(texts)
+        return ['preprocessed text'] * len(texts)
+    mock_processor.preprocess_batch.side_effect = _preprocess
+    mock_processor.postprocess_batch.side_effect = lambda decoded, **kw: ['translated output'] * len(decoded)
 
     mock_indic_toolkit = mock.MagicMock()
     mock_indic_toolkit.IndicProcessor.return_value = mock_processor
