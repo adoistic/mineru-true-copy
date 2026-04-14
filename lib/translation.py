@@ -238,10 +238,6 @@ class TranslationEngine:
         Preserved fields: bbox, type, font_size, font_name, lines, page_idx, etc.
         """
         result = copy.deepcopy(json_data)
-        content_list = result.get('content_list', [])
-
-        if not content_list:
-            return result
 
         # Ensure correct model direction is loaded
         needed_dir = _infer_direction(src_lang, tgt_lang)
@@ -251,41 +247,105 @@ class TranslationEngine:
                 f'but {needed_dir} is needed for {src_lang} -> {tgt_lang}'
             )
 
-        # Phase 1: Collect all text/title blocks for batch translation
+        # Support TWO JSON formats:
+        # 1. content_list format: {content_list: [{type, text, bbox, ...}]}
+        # 2. OCR output format: {pages: [{regions: [{type, content, bbox, ...}]}]}
+        content_list = result.get('content_list', [])
+
+        if content_list:
+            self._translate_content_list(content_list, src_lang, tgt_lang)
+        elif 'pages' in result:
+            # OCR output format: iterate pages > regions
+            for page in result.get('pages', []):
+                regions = page.get('regions', [])
+                if regions:
+                    self._translate_regions(regions, src_lang, tgt_lang)
+        elif 'pdf_info' in result:
+            # Raw MinerU format: iterate pdf_info > blocks
+            for page in result.get('pdf_info', []):
+                blocks = page.get('preproc_blocks', page.get('para_blocks', []))
+                if blocks:
+                    self._translate_content_list(blocks, src_lang, tgt_lang)
+
+        return result
+
+    def _translate_content_list(self, blocks: list, src_lang: str, tgt_lang: str) -> None:
+        """Batch translate text/title blocks in a content_list-style array."""
         text_indices: list[int] = []
         text_values: list[str] = []
         table_indices: list[int] = []
 
-        for i, block in enumerate(content_list):
+        for i, block in enumerate(blocks):
             block_type = block.get('type', '')
-            if block_type in ('text', 'title'):
-                text = block.get('text', '')
+            if block_type in ('text', 'title', 'list', 'caption'):
+                # Support both 'text' and 'content' field names
+                text = block.get('text', '') or block.get('content', '')
                 if text and text.strip():
                     text_indices.append(i)
                     text_values.append(text)
             elif block_type == 'table':
                 table_indices.append(i)
 
-        # Phase 2: Batch translate all text/title blocks in one inference call
+        # Batch translate all text blocks in one inference call
         if text_values:
             translated = self.translate_texts(text_values, src_lang, tgt_lang)
             for idx, trans in zip(text_indices, translated):
-                content_list[idx]['text'] = trans
+                # Write back to whichever field exists
+                if 'text' in blocks[idx]:
+                    blocks[idx]['text'] = trans
+                elif 'content' in blocks[idx]:
+                    blocks[idx]['content'] = trans
+                else:
+                    blocks[idx]['text'] = trans
 
-        # Phase 3: Handle table cells (batch all cell texts together)
+        # Handle table cells
         for idx in table_indices:
-            block = content_list[idx]
-            html = block.get('text', '') or block.get('html', '')
+            block = blocks[idx]
+            html = block.get('text', '') or block.get('html', '') or block.get('table_html', '')
             if html and html.strip():
-                translated_html = self._translate_table_html(
-                    html, src_lang, tgt_lang
-                )
-                if 'text' in block:
-                    block['text'] = translated_html
-                if 'html' in block:
+                translated_html = self._translate_table_html(html, src_lang, tgt_lang)
+                if 'table_html' in block:
+                    block['table_html'] = translated_html
+                elif 'html' in block:
                     block['html'] = translated_html
+                elif 'text' in block:
+                    block['text'] = translated_html
 
-        return result
+    def _translate_regions(self, regions: list, src_lang: str, tgt_lang: str) -> None:
+        """Batch translate regions in OCR output pages format."""
+        text_indices: list[int] = []
+        text_values: list[str] = []
+        table_indices: list[int] = []
+
+        for i, region in enumerate(regions):
+            region_type = region.get('type', '')
+            if region_type in ('text', 'title', 'list', 'caption'):
+                text = region.get('content', '') or region.get('text', '')
+                if text and text.strip():
+                    text_indices.append(i)
+                    text_values.append(text)
+            elif region_type == 'table':
+                table_indices.append(i)
+
+        if text_values:
+            translated = self.translate_texts(text_values, src_lang, tgt_lang)
+            for idx, trans in zip(text_indices, translated):
+                if 'content' in regions[idx]:
+                    regions[idx]['content'] = trans
+                elif 'text' in regions[idx]:
+                    regions[idx]['text'] = trans
+                else:
+                    regions[idx]['content'] = trans
+
+        for idx in table_indices:
+            region = regions[idx]
+            html = region.get('table_html', '') or region.get('html', '') or region.get('content', '')
+            if html and html.strip() and '<' in html:
+                translated_html = self._translate_table_html(html, src_lang, tgt_lang)
+                if 'table_html' in region:
+                    region['table_html'] = translated_html
+                elif 'html' in region:
+                    region['html'] = translated_html
 
     def _translate_table_html(self, html: str, src_lang: str, tgt_lang: str) -> str:
         """Extract text from table cells, batch translate, reinsert."""
