@@ -83,7 +83,7 @@ export default function TranslationTool() {
   // --- Translation config ---
   const [srcLang, setSrcLang] = useState("eng_Latn");
   const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set());
-  const [modelVariant, setModelVariant] = useState<ModelVariant>("1B");
+  const [modelVariant, setModelVariant] = useState<ModelVariant>("200M");
   const [outputFolder, setOutputFolder] = useState(() =>
     typeof window !== "undefined"
       ? localStorage.getItem("default_output_folder") ?? ""
@@ -158,25 +158,51 @@ export default function TranslationTool() {
     return () => clearInterval(interval);
   }, []);
 
-  // Re-check model status when model variant changes
+  // Re-check model status when model variant changes. Auto-load if the
+  // selected variant isn't the currently-loaded one.
   useEffect(() => {
-    async function checkModelForVariant() {
+    let cancelled = false;
+
+    async function ensureModelForVariant() {
       try {
         const res = await fetch("/api/translation/models");
         if (!res.ok) return;
         const data = await res.json();
+        if (cancelled) return;
+
         if (data.loaded?.variant === modelVariant) {
           setModelReady(true);
           setLoadedVariant(data.loaded.variant);
-        } else {
-          setModelReady(false);
-          setLoadedVariant(data.loaded?.variant ?? null);
+          return;
         }
-      } catch {
+
         setModelReady(false);
+        setLoadedVariant(data.loaded?.variant ?? null);
+
+        // Kick off a load of the requested variant. The translation server
+        // handles the (un)load of the previously-active model.
+        fetch("/api/translation/model/load", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ direction: "en-indic", variant: modelVariant }),
+        })
+          .then(async (r) => {
+            if (cancelled) return;
+            if (r.ok) {
+              setModelReady(true);
+              setLoadedVariant(modelVariant);
+            }
+          })
+          .catch(() => {});
+      } catch {
+        if (!cancelled) setModelReady(false);
       }
     }
-    checkModelForVariant();
+
+    ensureModelForVariant();
+    return () => {
+      cancelled = true;
+    };
   }, [modelVariant]);
 
   // Fetch credit balance
@@ -806,17 +832,6 @@ export default function TranslationTool() {
           >
             <button
               type="button"
-              onClick={() => setModelVariant("1B")}
-              className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
-              style={{
-                background: modelVariant === "1B" ? "var(--accent)" : "transparent",
-                color: modelVariant === "1B" ? "var(--text-inverse)" : "var(--text-secondary)",
-              }}
-            >
-              Quality
-            </button>
-            <button
-              type="button"
               onClick={() => setModelVariant("200M")}
               className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
               style={{
@@ -824,24 +839,47 @@ export default function TranslationTool() {
                 color: modelVariant === "200M" ? "var(--text-inverse)" : "var(--text-secondary)",
               }}
             >
-              Speed
+              Standard
+            </button>
+            <button
+              type="button"
+              onClick={() => setModelVariant("1B")}
+              className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
+              style={{
+                background: modelVariant === "1B" ? "var(--accent)" : "transparent",
+                color: modelVariant === "1B" ? "var(--text-inverse)" : "var(--text-secondary)",
+              }}
+            >
+              High Accuracy
             </button>
           </div>
 
           <p className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
-            {modelVariant === "1B"
-              ? "Higher accuracy, slower processing. Best for official documents."
-              : "Faster processing, slightly lower accuracy. Good for large batches."}
+            {modelVariant === "200M"
+              ? "Fast and accurate. Recommended for most documents."
+              : "Marginally higher accuracy. Requires a powerful machine (16GB+ RAM, GPU recommended); translation will be noticeably slower."}
           </p>
+
+          {modelVariant === "1B" && (
+            <div
+              className="mt-3 rounded p-3 text-[11px] flex items-start gap-2"
+              style={{ background: "var(--warning-muted)", color: "var(--warning)" }}
+            >
+              <svg className="h-4 w-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M4.93 4.93l14.14 14.14M12 3a9 9 0 100 18 9 9 0 000-18z" />
+              </svg>
+              <span>
+                High Accuracy mode needs significant memory and will be slow on modest hardware. Use Standard for everyday work.
+              </span>
+            </div>
+          )}
 
           {modelNotInstalled && (
             <div
               className="mt-3 rounded p-3 text-[11px]"
               style={{ background: "var(--warning-muted)", color: "var(--warning)" }}
             >
-              {loadedVariant
-                ? `The ${modelVariant === "1B" ? "Quality" : "Speed"} model is not loaded. The ${loadedVariant === "1B" ? "Quality" : "Speed"} model is currently active. Go to Settings to download or switch models.`
-                : `Model not installed. Go to Settings to download the ${modelVariant === "1B" ? "Quality" : "Speed"} model.`}
+              Loading translation model, please wait...
             </div>
           )}
         </div>
