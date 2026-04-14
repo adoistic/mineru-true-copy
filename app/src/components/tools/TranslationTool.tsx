@@ -158,48 +158,33 @@ export default function TranslationTool() {
     return () => clearInterval(interval);
   }, []);
 
-  // Re-check model status when model variant changes. Auto-load if the
-  // selected variant isn't the currently-loaded one.
+  // Track which variant is currently loaded in the server (informational
+  // only). DO NOT trigger a model reload on variant switch — the server
+  // handles the swap transparently when Translate is pressed, and preloading
+  // on every click wastes ~15s per click when users just want to read the
+  // High Accuracy warning. As long as SOME variant is loaded, translation
+  // is available; the server reloads if the requested variant differs.
   useEffect(() => {
     let cancelled = false;
 
-    async function ensureModelForVariant() {
+    async function checkLoadedVariant() {
       try {
         const res = await fetch("/api/translation/models");
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
 
-        if (data.loaded?.variant === modelVariant) {
-          setModelReady(true);
-          setLoadedVariant(data.loaded.variant);
-          return;
-        }
-
-        setModelReady(false);
-        setLoadedVariant(data.loaded?.variant ?? null);
-
-        // Kick off a load of the requested variant. The translation server
-        // handles the (un)load of the previously-active model.
-        fetch("/api/translation/model/load", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ direction: "en-indic", variant: modelVariant }),
-        })
-          .then(async (r) => {
-            if (cancelled) return;
-            if (r.ok) {
-              setModelReady(true);
-              setLoadedVariant(modelVariant);
-            }
-          })
-          .catch(() => {});
+        const loadedVar: string | null = data.loaded?.variant ?? null;
+        setLoadedVariant(loadedVar);
+        // Ready if any variant is loaded. The server reloads the requested
+        // variant on-demand inside _handle_translate when Translate fires.
+        setModelReady(loadedVar !== null);
       } catch {
         if (!cancelled) setModelReady(false);
       }
     }
 
-    ensureModelForVariant();
+    checkLoadedVariant();
     return () => {
       cancelled = true;
     };
@@ -906,12 +891,21 @@ export default function TranslationTool() {
             </div>
           )}
 
+          {/* Inform when selected variant differs from what's loaded — shows
+              user there will be a ~15s swap on first translate. Non-blocking. */}
+          {loadedVariant !== null && loadedVariant !== modelVariant && (
+            <p className="mt-2 text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+              First translation will take ~15s while the model switches.
+            </p>
+          )}
+
+          {/* Only show when engine has no model loaded at all (extremely rare). */}
           {modelNotInstalled && (
             <div
               className="mt-3 rounded p-3 text-[11px]"
               style={{ background: "var(--warning-muted)", color: "var(--warning)" }}
             >
-              Loading translation model, please wait...
+              Translation engine is starting up...
             </div>
           )}
         </div>
