@@ -141,8 +141,11 @@ export async function getTaskResult(taskId: string): Promise<{
   result?: MineruOutput;
   error?: string;
 }> {
+  // Completed tasks for large/dense PDFs can return multi-megabyte JSON
+  // (10k+ font spans, hundreds of blocks). 10s is too tight for that
+  // transfer under load. 120s covers a couple-hundred-MB result comfortably.
   const response = await fetch(`${getMineruUrl()}/tasks/${taskId}`, {
-    signal: AbortSignal.timeout(10000),
+    signal: AbortSignal.timeout(120000),
   });
 
   if (!response.ok) {
