@@ -529,8 +529,9 @@ if __name__ == '__main__':
 
     def _prewarm():
         try:
+            from lib.translation import is_available as _ts_is_available
             engine = _get_engine()
-            if not engine.is_available():
+            if not _ts_is_available():
                 logger.warning('Skipping prewarm: IndicTrans2 not installed')
                 return
             logger.info('Pre-warming model: %s %s', prewarm_direction, prewarm_variant)
@@ -538,7 +539,8 @@ if __name__ == '__main__':
                 engine.load_model(prewarm_direction, prewarm_variant)
             logger.info('Pre-warm complete')
         except Exception as e:
-            logger.warning('Pre-warm failed: %s', e)
+            import traceback
+            logger.warning('Pre-warm failed: %s\n%s', e, traceback.format_exc())
 
     if prewarm:
         threading.Thread(target=_prewarm, daemon=True).start()
