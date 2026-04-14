@@ -1091,22 +1091,44 @@ function extractTextBlocks(data: Record<string, unknown> | null): TextBlock[] {
   if (!data) return [];
 
   const blocks: TextBlock[] = [];
-  const pages = (data.pages || data.pdf_info || []) as Array<Record<string, unknown>>;
 
+  // Translation JSON uses content_list (flat array of blocks)
+  const contentList = data.content_list as Array<Record<string, unknown>> | undefined;
+  if (contentList && Array.isArray(contentList)) {
+    for (const item of contentList) {
+      const blockType = (item.type || "") as string;
+      if (blockType !== "text" && blockType !== "title") continue;
+      const text = (item.text || "") as string;
+      if (!text.trim()) continue;
+
+      let confidence: ConfidenceLevel = "high";
+      if (item.confidence !== undefined) {
+        const c = item.confidence as number;
+        if (c < 0.5) confidence = "low";
+        else if (c < 0.8) confidence = "medium";
+      } else {
+        if (text.length < 10) confidence = "medium";
+      }
+
+      blocks.push({ text, confidence });
+    }
+    return blocks;
+  }
+
+  // MinerU output format uses pages > regions (fallback for original doc preview)
+  const pages = (data.pages || data.pdf_info || []) as Array<Record<string, unknown>>;
   for (const page of pages) {
     const regions = (page.regions || page.preproc_blocks || page.blocks || page.para_blocks || []) as Array<Record<string, unknown>>;
     for (const region of regions) {
       const text = (region.content || region.text || "") as string;
       if (!text.trim()) continue;
 
-      // Assign confidence based on available metadata or heuristically
       let confidence: ConfidenceLevel = "high";
       if (region.confidence !== undefined) {
         const c = region.confidence as number;
         if (c < 0.5) confidence = "low";
         else if (c < 0.8) confidence = "medium";
       } else {
-        // Heuristic: shorter blocks or blocks with special chars get lower confidence
         if (text.length < 10) confidence = "medium";
       }
 
