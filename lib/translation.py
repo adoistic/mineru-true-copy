@@ -280,24 +280,43 @@ class TranslationEngine:
             )
             self._logged_tune = True
 
+        # Pad the final chunk to a uniform batch size so MPS reuses its
+        # compiled graph (different batch sizes = different compiled graphs).
+        # The placeholder " " translations are discarded before return.
         all_results: list[str] = []
         for i in range(0, len(texts), bs):
             chunk = texts[i:i + bs]
-            all_results.extend(self._translate_chunk(chunk, src_lang, tgt_lang, nb))
+            real_count = len(chunk)
+            if real_count < bs:
+                chunk = list(chunk) + [' '] * (bs - real_count)
+            chunk_out = self._translate_chunk(chunk, src_lang, tgt_lang, nb)
+            all_results.extend(chunk_out[:real_count])
             gc.collect()
 
         return all_results
 
     def _translate_chunk(self, texts: list[str], src_lang: str, tgt_lang: str, num_beams: int) -> list[str]:
-        """Run one GPU inference over a list of texts."""
+        """Run one GPU inference over a list of texts.
+
+        CRITICAL for MPS performance: pad every chunk to a fixed shape
+        (batch_size x 256). MPS caches the compiled generation graph per
+        input shape; with padding='longest' every chunk gets a different
+        sequence length, each triggering a 30-60 s recompile on Apple
+        Silicon. padding='max_length' with a constant max_length makes
+        every chunk the same shape, so MPS compiles once and reuses.
+        Padded-up chunks shorter than the max are a small constant-factor
+        waste (~2-3x slower per tiny sentence) but VASTLY faster overall
+        than recompiling on every chunk.
+        """
         import torch
 
         batch = self._processor.preprocess_batch(
             texts, src_lang=src_lang, tgt_lang=tgt_lang
         )
         inputs = self._tokenizer(
-            batch, return_tensors='pt', padding=True, truncation=True,
-            max_length=256
+            batch, return_tensors='pt',
+            padding='max_length', truncation=True,
+            max_length=256,
         ).to(self._device)
 
         with torch.no_grad():
@@ -345,17 +364,24 @@ class TranslationEngine:
         if content_list:
             self._translate_content_list(content_list, src_lang, tgt_lang)
         elif 'pages' in result:
-            # OCR output format: iterate pages > regions
+            # OCR output format: collect ALL regions from ALL pages into one
+            # list so translate_texts can use a uniform batch size and reuse
+            # the MPS graph. Per-page calls create N different batch shapes,
+            # each triggering a ~30-60s graph recompile.
+            all_regions: list = []
             for page in result.get('pages', []):
-                regions = page.get('regions', [])
-                if regions:
-                    self._translate_regions(regions, src_lang, tgt_lang)
+                all_regions.extend(page.get('regions', []))
+            if all_regions:
+                self._translate_regions(all_regions, src_lang, tgt_lang)
         elif 'pdf_info' in result:
-            # Raw MinerU format: iterate pdf_info > blocks
+            # Raw MinerU format: same idea, flatten all blocks first.
+            all_blocks: list = []
             for page in result.get('pdf_info', []):
-                blocks = page.get('preproc_blocks', page.get('para_blocks', []))
-                if blocks:
-                    self._translate_content_list(blocks, src_lang, tgt_lang)
+                all_blocks.extend(
+                    page.get('preproc_blocks', page.get('para_blocks', []))
+                )
+            if all_blocks:
+                self._translate_content_list(all_blocks, src_lang, tgt_lang)
 
         return result
 
