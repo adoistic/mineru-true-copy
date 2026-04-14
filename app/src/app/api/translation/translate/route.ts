@@ -9,12 +9,13 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const {
-      json_data,
+      json_data: bodyJsonData,
+      json_path,
       src_lang,
       tgt_lang,
       model_variant = '1B',
       output_folder,
-      file_name,
+      file_name: bodyFileName,
       output_formats,
       remove_headers_footers,
       formula_display,
@@ -23,11 +24,24 @@ export async function POST(request: NextRequest) {
       figure_display,
     } = body;
 
-    if (!json_data) {
-      return Response.json({ error: 'json_data is required' }, { status: 400 });
-    }
     if (!tgt_lang) {
       return Response.json({ error: 'tgt_lang is required' }, { status: 400 });
+    }
+
+    // Accept either inline json_data (single-file UI flow) or a json_path
+    // (folder-scan flow). json_path is resolved and loaded here.
+    let json_data = bodyJsonData;
+    let file_name = bodyFileName;
+    if (!json_data && json_path) {
+      if (!fs.existsSync(json_path)) {
+        return Response.json({ error: `json_path not found: ${json_path}` }, { status: 400 });
+      }
+      json_data = JSON.parse(fs.readFileSync(json_path, 'utf-8'));
+      if (!file_name) file_name = path.basename(json_path);
+    }
+
+    if (!json_data) {
+      return Response.json({ error: 'json_data or json_path is required' }, { status: 400 });
     }
 
     const result = await submitTranslation(json_data, src_lang, tgt_lang, model_variant);
@@ -38,7 +52,12 @@ export async function POST(request: NextRequest) {
     let outputFiles: string[] = [];
 
     if (output_folder && file_name) {
-      const baseName = path.parse(file_name).name;
+      // Strip our OCR pipeline's "_ocr_data" suffix so the output folder
+      // name matches the original document (not <name>_ocr_data).
+      let baseName = path.parse(file_name).name;
+      if (baseName.toLowerCase().endsWith('_ocr_data')) {
+        baseName = baseName.slice(0, -'_ocr_data'.length);
+      }
       const docFolder = path.join(output_folder, baseName);
       const langFolder = path.join(docFolder, tgt_lang);
       fs.mkdirSync(langFolder, { recursive: true });

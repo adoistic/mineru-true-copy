@@ -124,6 +124,15 @@ export default function TranslationTool() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
 
+  // --- Folder mode state (bulk translation from a directory of OCR outputs) ---
+  const [mode, setMode] = useState<'file' | 'folder'>('file');
+  const [sourceFolder, setSourceFolder] = useState<string>('');
+  const [discoveredFiles, setDiscoveredFiles] = useState<
+    { json_path: string; base_name: string; doc_folder: string }[]
+  >([]);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+
   // --- Translation config ---
   const [srcLang, setSrcLang] = useState("eng_Latn");
   const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set());
@@ -345,9 +354,16 @@ export default function TranslationTool() {
       .join(", ");
   }, [selectedLangs]);
 
-  // --- Translate ---
+  // --- Translate (single-file mode) ---
   const handleTranslate = useCallback(async () => {
-    if (!jsonData || selectedLangs.size === 0) return;
+    if (selectedLangs.size === 0) return;
+
+    // In folder mode, delegate to the bulk handler.
+    if (mode === 'folder') {
+      if (discoveredFiles.length === 0) return;
+    } else if (!jsonData) {
+      return;
+    }
 
     setProcessing(true);
     setError(null);
@@ -356,59 +372,139 @@ export default function TranslationTool() {
     setTranslatedResults([]);
 
     const langs = Array.from(selectedLangs);
-    setProgressTotal(langs.length);
+
+    // Iterate over files (1 for file mode, N for folder mode).
+    const workItems =
+      mode === 'folder'
+        ? discoveredFiles
+        : [{ json_path: '', base_name: fileName || 'doc', doc_folder: '' }];
+
+    const totalSteps = workItems.length * langs.length;
+    setProgressTotal(totalSteps);
     setProgressCurrent(0);
 
     const results: Array<{ lang: string; data: Record<string, unknown> }> = [];
     const files: string[] = [];
 
-    for (let i = 0; i < langs.length; i++) {
-      const tgtLang = langs[i];
-      setProgressCurrent(i);
-      setProgressMessage(`Translating to ${LANG_LABELS[tgtLang] || tgtLang} (${i + 1}/${langs.length})`);
+    let step = 0;
+    outer: for (const item of workItems) {
+      // In folder mode, each file's outputs go into its own doc folder:
+      //   {sourceFolder}/{base_name}/{tgt_lang}/...
+      // That way translations live next to the OCR outputs for each doc.
+      const perFileOutput =
+        mode === 'folder' ? item.doc_folder || sourceFolder : outputFolder;
 
-      try {
-        const res = await fetch("/api/translation/translate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            json_data: jsonData,
+      for (let i = 0; i < langs.length; i++) {
+        const tgtLang = langs[i];
+        setProgressCurrent(step);
+        setProgressMessage(
+          mode === 'folder'
+            ? `${item.base_name} → ${LANG_LABELS[tgtLang] || tgtLang} (${step + 1}/${totalSteps})`
+            : `Translating to ${LANG_LABELS[tgtLang] || tgtLang} (${i + 1}/${langs.length})`,
+        );
+
+        try {
+          const bodyPayload: Record<string, unknown> = {
             src_lang: srcLang,
             tgt_lang: tgtLang,
             model_variant: modelVariant,
-            output_folder: outputFolder,
-            file_name: fileName,
+            output_folder: perFileOutput,
             output_formats: Array.from(selectedFormats),
-          }),
-        });
+          };
+          if (mode === 'folder') {
+            bodyPayload.json_path = item.json_path;
+            bodyPayload.file_name = `${item.base_name}.json`;
+          } else {
+            bodyPayload.json_data = jsonData;
+            bodyPayload.file_name = fileName;
+          }
 
-        if (!res.ok) {
-          const data = await res.json().catch(() => null);
-          throw new Error(data?.error ?? `Translation failed for ${LANG_LABELS[tgtLang]}`);
-        }
+          const res = await fetch("/api/translation/translate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(bodyPayload),
+          });
 
-        const data = await res.json();
-        results.push({ lang: tgtLang, data: data.translated_json });
-        if (Array.isArray(data.output_files) && data.output_files.length) {
-          files.push(...data.output_files);
-        } else if (data.output_file) {
-          files.push(data.output_file);
+          if (!res.ok) {
+            const data = await res.json().catch(() => null);
+            throw new Error(data?.error ?? `Translation failed for ${LANG_LABELS[tgtLang]}`);
+          }
+
+          const data = await res.json();
+          // For preview we keep the LAST file's translations (folder mode)
+          // or the only file's (file mode).
+          results.push({ lang: tgtLang, data: data.translated_json });
+          if (Array.isArray(data.output_files) && data.output_files.length) {
+            files.push(...data.output_files);
+          } else if (data.output_file) {
+            files.push(data.output_file);
+          }
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "Translation failed.");
+          break outer;
         }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Translation failed.");
-        break;
+        step += 1;
       }
     }
 
-    setProgressCurrent(langs.length);
-    setTranslatedResults(results);
+    setProgressCurrent(totalSteps);
+    // In folder mode there may be many results across many files — for the
+    // preview, show the latest one-file-per-language group (last file).
+    const lastFileResults =
+      mode === 'folder'
+        ? results.slice(-langs.length)
+        : results;
+    setTranslatedResults(lastFileResults);
     setOutputFiles(files);
     setCompleted(true);
     setProcessing(false);
-    if (results.length > 0 && !previewLang) {
-      setPreviewLang(results[0].lang);
+    if (lastFileResults.length > 0 && !previewLang) {
+      setPreviewLang(lastFileResults[0].lang);
     }
-  }, [jsonData, selectedLangs, srcLang, modelVariant, outputFolder, fileName, previewLang, selectedFormats]);
+  }, [
+    jsonData,
+    selectedLangs,
+    srcLang,
+    modelVariant,
+    outputFolder,
+    fileName,
+    previewLang,
+    selectedFormats,
+    mode,
+    discoveredFiles,
+    sourceFolder,
+  ]);
+
+  // --- Folder scan ---
+  const handlePickSourceFolder = useCallback(async () => {
+    setScanError(null);
+    try {
+      const res = await fetch("/api/browse", { method: "POST" });
+      const data = await res.json();
+      if (!data.path) return;
+      setSourceFolder(data.path);
+      setScanning(true);
+      const scan = await fetch("/api/translation/scan-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ folder: data.path }),
+      });
+      const scanData = await scan.json();
+      setScanning(false);
+      if (!scan.ok) {
+        setScanError(scanData?.error ?? "scan failed");
+        setDiscoveredFiles([]);
+        return;
+      }
+      setDiscoveredFiles(scanData.files ?? []);
+      if ((scanData.files ?? []).length === 0) {
+        setScanError("No OCR JSON files found in this folder.");
+      }
+    } catch (err) {
+      setScanning(false);
+      setScanError(err instanceof Error ? err.message : "scan failed");
+    }
+  }, []);
 
   // --- Folder browse ---
   const handleBrowse = useCallback(async () => {
@@ -650,12 +746,15 @@ export default function TranslationTool() {
   // ---------------------------------------------------------------------------
   const modelNotInstalled = modelReady === false && serverAvailable === true;
 
+  const hasInput =
+    mode === 'folder' ? discoveredFiles.length > 0 : jsonData !== null;
+
   const canTranslate =
-    jsonData !== null &&
+    hasInput &&
     selectedLangs.size > 0 &&
     !insufficientCredits &&
     !modelNotInstalled &&
-    outputFolder.length > 0;
+    (mode === 'folder' ? sourceFolder.length > 0 : outputFolder.length > 0);
 
   return (
     <div className="space-y-6">
@@ -673,7 +772,105 @@ export default function TranslationTool() {
         </div>
       )}
 
-      {/* File drop zone — JSON only */}
+      {/* Mode toggle: single file vs folder of OCR outputs */}
+      <div
+        role="tablist"
+        aria-label="Input mode"
+        className="flex gap-1 rounded p-1 text-[12px]"
+        style={{ background: "var(--bg-input)", border: "1px solid var(--border-default)", width: "fit-content" }}
+      >
+        {(['file', 'folder'] as const).map((m) => (
+          <button
+            key={m}
+            role="tab"
+            aria-selected={mode === m}
+            onClick={() => { setMode(m); setError(null); }}
+            className="rounded px-3 py-1 transition-colors"
+            style={{
+              background: mode === m ? 'var(--accent-muted)' : 'transparent',
+              color: mode === m ? 'var(--accent-text)' : 'var(--text-secondary)',
+              fontWeight: mode === m ? 500 : 400,
+            }}
+          >
+            {m === 'file' ? 'Single file' : 'Folder (bulk)'}
+          </button>
+        ))}
+      </div>
+
+      {mode === 'folder' ? (
+        /* Folder picker for bulk translation from OCR output directories */
+        <div
+          onClick={handlePickSourceFolder}
+          className="relative flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 transition-colors cursor-pointer"
+          style={{
+            borderColor: sourceFolder
+              ? "var(--success)"
+              : "var(--border-default)",
+            background: sourceFolder ? "var(--success-muted)" : "var(--bg-input)",
+          }}
+        >
+          {sourceFolder ? (
+            <div className="flex w-full flex-col items-center gap-2 text-center">
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} style={{ color: "var(--success)" }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5V18a1.5 1.5 0 001.5 1.5h15A1.5 1.5 0 0021 18V8.25a1.5 1.5 0 00-1.5-1.5h-7.5l-2.25-2.25H4.5A1.5 1.5 0 003 6v1.5z" />
+              </svg>
+              <code className="text-[12px] break-all" style={{ color: "var(--text-primary)" }}>
+                {sourceFolder}
+              </code>
+              <p className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                {scanning
+                  ? "Scanning..."
+                  : `${discoveredFiles.length} OCR JSON file${discoveredFiles.length !== 1 ? "s" : ""} detected`}
+              </p>
+              {discoveredFiles.length > 0 && (
+                <details className="mt-1 w-full max-w-md text-left">
+                  <summary className="cursor-pointer text-[11px]" style={{ color: "var(--text-secondary)" }}>
+                    Show files
+                  </summary>
+                  <ul className="mt-2 max-h-32 overflow-y-auto rounded p-2 text-[11px]" style={{ background: "var(--bg-input)", color: "var(--text-secondary)" }}>
+                    {discoveredFiles.map((f) => (
+                      <li key={f.json_path} className="truncate" title={f.json_path}>
+                        {f.base_name}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSourceFolder("");
+                  setDiscoveredFiles([]);
+                  setScanError(null);
+                }}
+                className="text-[11px] transition-colors"
+                style={{ color: "var(--error)" }}
+              >
+                Remove
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-2 text-center">
+              <svg className="h-10 w-10" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} style={{ color: "var(--text-tertiary)" }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7.5V18a1.5 1.5 0 001.5 1.5h15A1.5 1.5 0 0021 18V8.25a1.5 1.5 0 00-1.5-1.5h-7.5l-2.25-2.25H4.5A1.5 1.5 0 003 6v1.5z" />
+              </svg>
+              <p className="text-[13px] font-medium" style={{ color: "var(--text-secondary)" }}>
+                Choose a folder of OCR outputs
+              </p>
+              <p className="text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+                We'll auto-detect <code>{"{doc}/Data/*_ocr_data.json"}</code> — one JSON per subfolder. Translations are written next to each doc as{" "}
+                <code>{"{doc}/{language}/"}</code>.
+              </p>
+            </div>
+          )}
+          {scanError && (
+            <p className="mt-3 text-[11px] font-medium" style={{ color: "var(--error)" }}>
+              {scanError}
+            </p>
+          )}
+        </div>
+      ) : (
+      /* File drop zone — JSON only */
       <div
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
         onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
@@ -766,6 +963,7 @@ export default function TranslationTool() {
           </p>
         )}
       </div>
+      )}
 
       {/* Options panel */}
       <div
