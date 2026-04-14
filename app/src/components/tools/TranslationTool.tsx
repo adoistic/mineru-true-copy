@@ -1,7 +1,51 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
-import type { ModelVariant, TranslationViewMode, ConfidenceLevel, Language, LanguageGroup } from "@/types";
+import type { ModelVariant, TranslationViewMode, ConfidenceLevel, Language, LanguageGroup, ExportFormat } from "@/types";
+
+// ---------------------------------------------------------------------------
+// Export formats — mirrors OcrTool FORMAT_GROUPS minus `searchable_pdf`.
+// Searchable PDF overlays OCR text on the ORIGINAL PDF pages; it can't render
+// translated Devanagari on English glyph boxes, so we exclude it for translation.
+// ---------------------------------------------------------------------------
+
+const TRANSLATION_FORMAT_GROUPS: {
+  label: string;
+  description: string;
+  formats: { key: ExportFormat; label: string; tooltip?: string }[];
+}[] = [
+  {
+    label: "True Copy",
+    description: "Pixel-perfect layout preserving original positioning",
+    formats: [
+      { key: "true_copy_html", label: "HTML", tooltip: "Self-contained HTML with translated text at original bboxes" },
+      { key: "true_copy_docx", label: "Word (.docx)", tooltip: "Word document preserving original layout with translated text" },
+      { key: "true_copy_pdf", label: "PDF", tooltip: "PDF with translated text positioned at original bboxes" },
+      { key: "true_copy_pptx", label: "PowerPoint (.pptx)", tooltip: "Slide-per-page with translated text boxes" },
+    ],
+  },
+  {
+    label: "Reflowed",
+    description: "Semantic, editable output",
+    formats: [
+      { key: "reflowed_docx", label: "Word (.docx)", tooltip: "Editable Word document with translated paragraphs" },
+      { key: "reflowed_pdf", label: "PDF", tooltip: "Readable PDF of translated text with paragraph flow" },
+      { key: "markdown", label: "Markdown", tooltip: "Plain text with Markdown formatting" },
+      { key: "epub", label: "EPUB", tooltip: "E-book format for readers" },
+    ],
+  },
+  {
+    label: "Data",
+    description: "Structured output for downstream processing",
+    formats: [
+      { key: "json", label: "JSON", tooltip: "Translated JSON with regions, bboxes, and metadata" },
+    ],
+  },
+];
+
+const DEFAULT_TRANSLATION_FORMATS: ExportFormat[] = TRANSLATION_FORMAT_GROUPS.flatMap((g) =>
+  g.formats.map((f) => f.key),
+);
 
 // ---------------------------------------------------------------------------
 // Language data — grouped by script family
@@ -84,6 +128,17 @@ export default function TranslationTool() {
   const [srcLang, setSrcLang] = useState("eng_Latn");
   const [selectedLangs, setSelectedLangs] = useState<Set<string>>(new Set());
   const [modelVariant, setModelVariant] = useState<ModelVariant>("200M");
+  const [selectedFormats, setSelectedFormats] = useState<Set<ExportFormat>>(
+    () => new Set(DEFAULT_TRANSLATION_FORMATS),
+  );
+  const toggleFormat = useCallback((fmt: ExportFormat) => {
+    setSelectedFormats((prev) => {
+      const next = new Set(prev);
+      if (next.has(fmt)) next.delete(fmt);
+      else next.add(fmt);
+      return next;
+    });
+  }, []);
   const [outputFolder, setOutputFolder] = useState(() =>
     typeof window !== "undefined"
       ? localStorage.getItem("default_output_folder") ?? ""
@@ -323,6 +378,7 @@ export default function TranslationTool() {
             model_variant: modelVariant,
             output_folder: outputFolder,
             file_name: fileName,
+            output_formats: Array.from(selectedFormats),
           }),
         });
 
@@ -333,7 +389,11 @@ export default function TranslationTool() {
 
         const data = await res.json();
         results.push({ lang: tgtLang, data: data.translated_json });
-        if (data.output_file) files.push(data.output_file);
+        if (Array.isArray(data.output_files) && data.output_files.length) {
+          files.push(...data.output_files);
+        } else if (data.output_file) {
+          files.push(data.output_file);
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Translation failed.");
         break;
@@ -348,7 +408,7 @@ export default function TranslationTool() {
     if (results.length > 0 && !previewLang) {
       setPreviewLang(results[0].lang);
     }
-  }, [jsonData, selectedLangs, srcLang, modelVariant, outputFolder, fileName, previewLang]);
+  }, [jsonData, selectedLangs, srcLang, modelVariant, outputFolder, fileName, previewLang, selectedFormats]);
 
   // --- Folder browse ---
   const handleBrowse = useCallback(async () => {
@@ -908,6 +968,57 @@ export default function TranslationTool() {
               Translation engine is starting up...
             </div>
           )}
+        </div>
+
+        {/* SECTION: Export Formats */}
+        <div style={{ borderTop: "1px solid var(--border-default)", paddingTop: "16px" }}>
+          <label
+            className="mb-2 block text-[11px] font-medium uppercase tracking-[0.05em]"
+            style={{ color: "var(--text-secondary)" }}
+          >
+            Export Formats
+          </label>
+          <p className="mb-3 text-[11px]" style={{ color: "var(--text-tertiary)" }}>
+            Translated output is written to{" "}
+            <code style={{ color: "var(--text-secondary)" }}>output/{"{doc}"}/{"{language}"}/</code>{" "}
+            with True Copy, Reflowed, and Data subfolders. Figures and formulas
+            are embedded inline from the OCR JSON.
+          </p>
+          <div className="space-y-3">
+            {TRANSLATION_FORMAT_GROUPS.map((group) => (
+              <div key={group.label} role="group" aria-label={group.label}>
+                <div
+                  className="mb-1.5 text-[11px] font-medium"
+                  style={{ color: "var(--text-primary)" }}
+                >
+                  {group.label}
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  {group.formats.map((f) => {
+                    const checked = selectedFormats.has(f.key);
+                    return (
+                      <label
+                        key={f.key}
+                        className="flex cursor-pointer items-center gap-2 text-[13px]"
+                        title={f.tooltip}
+                        style={{ color: "var(--text-primary)" }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleFormat(f.key)}
+                          className="h-4 w-4 cursor-pointer"
+                          style={{ accentColor: "var(--accent)" }}
+                          aria-label={`${group.label} — ${f.label}`}
+                        />
+                        <span>{f.label}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* SECTION: Output Folder */}
