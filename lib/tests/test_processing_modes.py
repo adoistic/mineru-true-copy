@@ -279,19 +279,21 @@ class TestErrorCodes(unittest.TestCase):
     """Test error code classification."""
 
     def test_error_messages_exist_for_all_codes(self):
-        """Every defined error code has a user-facing message."""
-        import importlib
-        # Dynamically check the ERROR_MESSAGES dict in mineru_server
+        """Every defined error code has a user-facing message.
+
+        Credit-system codes (CR-INS, CR-ERR) were removed when the activation
+        and credit ledger were stripped for the AGPL release. The remaining
+        codes describe processing/transport failures that any MinerU True Copy
+        instance can still hit. The white-label OpenRouter/PaddleOCR leak
+        guards are also gone: the project now names both providers openly in
+        the README and NOTICE.
+        """
         import mineru_server
         codes = ['CP-401', 'CP-429', 'CP-503', 'CP-500',
-                 'LP-MDL', 'LP-OOM', 'CT-503', 'CR-INS', 'CR-ERR']
+                 'LP-MDL', 'LP-OOM', 'CT-503']
         for code in codes:
             self.assertIn(code, mineru_server.ERROR_MESSAGES,
                           f"Missing message for error code {code}")
-            self.assertNotIn('OpenRouter', mineru_server.ERROR_MESSAGES[code],
-                             f"Engine name leaked in {code} message")
-            self.assertNotIn('PaddleOCR', mineru_server.ERROR_MESSAGES[code],
-                             f"Engine name leaked in {code} message")
 
     def test_make_error_structure(self):
         """_make_error returns correct structure."""
