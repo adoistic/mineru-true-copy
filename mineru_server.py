@@ -42,6 +42,7 @@ import json
 import logging
 import logging.handlers
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -874,22 +875,9 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         logger.info('Processing mode: ocr=%s, table=%s',
                     ocr_mode, table_mode, extra={'task_id': task_id})
 
-        # Disk-space pre-flight: reject if < 2GB free to prevent the error-spam
-        # feedback loop that crashed the laptop (6.7GB log from failed writes)
-        import shutil as _shutil_check
-        free_bytes = _shutil_check.disk_usage(tempfile.gettempdir()).free
-        MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
-        if free_bytes < MIN_FREE_BYTES:
-            with _tasks_lock:
-                tasks[task_id]['status'] = 'failed'
-                tasks[task_id]['_completed_at'] = time.time()
-                tasks[task_id]['error'] = (
-                    f'Insufficient disk space: {free_bytes / (1024**3):.1f}GB free, '
-                    f'need at least 2GB'
-                )
-            logger.error('Insufficient disk space: %.1fGB free, need 2GB',
-                         free_bytes / (1024**3), extra={'task_id': task_id})
-            return
+        # Disk-space safeguard lives at the HTTP layer in _handle_file_parse
+        # (returns 507 before the task is queued). See TODO 17 regression
+        # comment there for context.
 
         with _tasks_lock:
             tasks[task_id]['status'] = 'processing'
@@ -2965,6 +2953,24 @@ class MineruHandler(BaseHTTPRequestHandler):
         MAX_UPLOAD_BYTES = 500 * 1024 * 1024  # 500MB
         if content_length > MAX_UPLOAD_BYTES:
             self._send_json(413, {'error': f'Payload too large ({content_length} bytes). Max: {MAX_UPLOAD_BYTES} bytes (500MB)'})
+            return
+
+        # TODO 17 regression: hoist the disk-space safeguard from the worker
+        # to the HTTP layer. Previously the < 2GB check ran inside process_pdf
+        # AFTER returning 200 with a task_id, so clients polled a doomed task
+        # and the server kept logging into a /tmp that had no room. With /tmp
+        # full, RotatingFileHandler errors fed back into the logger, producing
+        # a 6.7GB log file that crashed the laptop. Reject synchronously here.
+        MIN_FREE_BYTES = 2 * 1024 * 1024 * 1024  # 2GB
+        free_bytes = shutil.disk_usage(tempfile.gettempdir()).free
+        if free_bytes < MIN_FREE_BYTES:
+            free_gb = free_bytes / (1024 ** 3)
+            self._send_json(507, {
+                'error': (
+                    f'insufficient disk space: {free_gb:.1f}GB free in '
+                    f'{tempfile.gettempdir()}, need at least 2GB'
+                ),
+            })
             return
 
         body = self.rfile.read(content_length)

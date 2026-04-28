@@ -235,30 +235,24 @@ class TestMaxUpload:
 # ---------------------------------------------------------------------------
 
 class TestDiskSpacePreFlight:
-    def test_low_disk_space_fails_task(self):
-        """When disk < 2GB free, process_pdf should fail the task."""
-        from mineru_server import tasks, process_pdf
+    """The disk-space safeguard now lives at the HTTP layer (returns 507
+    from /file_parse before queueing). The dedicated regression test is
+    in lib/tests/test_disk_safeguard.py — see TODO 17 for context."""
 
-        task_id = 'test-disk-space'
-        tasks[task_id] = {
-            'task_id': task_id,
-            'status': 'pending',
-            'result': None,
-            'error': None,
-        }
+    def test_disk_check_no_longer_in_worker(self):
+        """process_pdf must not contain its own disk-space check anymore.
 
-        # Mock disk_usage to return < 2GB free
-        fake_usage = MagicMock()
-        fake_usage.free = 1 * 1024 * 1024 * 1024  # 1GB (below 2GB threshold)
+        Keeping the gate in one place (the HTTP handler) avoids the tautology
+        of checking twice and makes the failure mode obvious to readers.
+        """
+        import inspect
+        from mineru_server import process_pdf
 
-        try:
-            with patch('shutil.disk_usage', return_value=fake_usage):
-                process_pdf(task_id, b'%PDF-fake', 'test.pdf', {})
-
-            assert tasks[task_id]['status'] == 'failed'
-            assert 'disk space' in tasks[task_id]['error'].lower()
-        finally:
-            tasks.pop(task_id, None)
+        src = inspect.getsource(process_pdf)
+        assert 'disk_usage' not in src, (
+            'process_pdf still references disk_usage; the check should '
+            'live in _handle_file_parse (HTTP 507), not the worker.'
+        )
 
 
 # ---------------------------------------------------------------------------
