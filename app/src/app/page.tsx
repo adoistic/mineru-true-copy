@@ -81,6 +81,11 @@ export default function Home() {
   const [enginesReady, setEnginesReady] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolId>("ocr");
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // When set, SettingsOverlay auto-scrolls to the named anchor on open.
+  // Cleared on close so a subsequent gear-icon open doesn't jump back to it.
+  const [settingsScrollTo, setSettingsScrollTo] = useState<"about" | undefined>(
+    undefined
+  );
   const [mineruStatus, setMineruStatus] = useState<"green" | "yellow" | "red">(
     "yellow"
   );
@@ -254,16 +259,34 @@ export default function Home() {
               ? `${activeJobs} job${activeJobs !== 1 ? "s" : ""}`
               : "No jobs"}
           </span>
-          <span className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-            v1.0.0
-          </span>
+          {/* AGPL §5 discovery vector — always one click from any tool tab. */}
+          <button
+            type="button"
+            onClick={() => {
+              setSettingsScrollTo("about");
+              setSettingsOpen(true);
+            }}
+            aria-label="View license and credits (AGPL-3.0)"
+            className="text-[11px] transition-colors"
+            style={{ color: 'var(--text-tertiary)', background: 'transparent' }}
+            onMouseEnter={(e) => { e.currentTarget.style.color = 'var(--accent)'; }}
+            onMouseLeave={(e) => { e.currentTarget.style.color = 'var(--text-tertiary)'; }}
+          >
+            v0.1.0 · AGPL-3.0
+          </button>
         </div>
       </footer>
 
       {/* Settings overlay */}
       <SettingsOverlay
         isOpen={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
+        onClose={() => {
+          setSettingsOpen(false);
+          // Reset deep-link anchor so next open via the gear icon doesn't
+          // auto-scroll back to About.
+          setSettingsScrollTo(undefined);
+        }}
+        scrollTo={settingsScrollTo}
       />
 
       {/* Toast notifications — slide from right, auto-dismiss 5s */}
