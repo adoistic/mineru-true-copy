@@ -87,7 +87,6 @@ export default function OcrTool() {
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
-  const [pageCount, setPageCount] = useState<number | null>(null);
 
   // Fetch mode availability from server health endpoint
   useEffect(() => {
@@ -115,20 +114,6 @@ export default function OcrTool() {
     }
     checkModes();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Estimate page count when files change
-  useEffect(() => {
-    if (files.length === 0) {
-      setPageCount(null);
-      return;
-    }
-    // Rough estimate: 1 page per 100KB, minimum 1 page per file
-    const estimated = files.reduce((sum, f) => {
-      const pages = Math.max(1, Math.round(f.size / (100 * 1024)));
-      return sum + pages;
-    }, 0);
-    setPageCount(estimated);
-  }, [files]);
 
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);

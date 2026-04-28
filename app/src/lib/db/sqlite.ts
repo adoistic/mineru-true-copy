@@ -140,9 +140,9 @@ export function updateJobStatus(jobId: string, status: JobStatus, extra?: Partia
     values.push(extra.retry_count);
   }
 
-  if ((extra as Record<string, unknown>)?.output_files !== undefined) {
+  if (extra?.output_files !== undefined) {
     updates.push('output_files = ?');
-    values.push(JSON.stringify((extra as Record<string, unknown>).output_files));
+    values.push(JSON.stringify(extra.output_files));
   }
 
   values.push(jobId);

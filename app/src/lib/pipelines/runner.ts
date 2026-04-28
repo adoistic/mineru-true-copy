@@ -122,9 +122,11 @@ export async function runPipeline(params: {
     result = { success: false, completedPages: 0, totalPages };
   }
 
-  // Update job final status (including output file paths)
-  const jobStatus = result.success ? 'completed' : result.completedPages > 0 ? 'completed' : 'failed';
-  updateJobStatus(job.id, jobStatus as Job['status'], {
+  // Update job final status (including output file paths).
+  // Any forward progress counts as 'completed'; only zero-progress runs are 'failed'.
+  const jobStatus: Job['status'] =
+    result.success || result.completedPages > 0 ? 'completed' : 'failed';
+  updateJobStatus(job.id, jobStatus, {
     completed_pages: result.completedPages,
     error_message: result.error?.message ?? null,
     error_type: result.error?.type ?? null,
@@ -135,7 +137,7 @@ export async function runPipeline(params: {
     job_id: job.id,
     current_page: result.completedPages,
     total_pages: totalPages,
-    status: jobStatus as Job['status'],
+    status: jobStatus,
     message: result.success ? 'Complete' : result.error?.message || 'Failed',
   });
 

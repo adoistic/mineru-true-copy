@@ -9,7 +9,6 @@ import fs from 'fs';
 import path from 'path';
 
 const MAX_PAGES = 10;
-const DPI = 150;
 
 export class ExtractionPipeline implements Pipeline {
   name = 'Extraction';
