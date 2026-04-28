@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { Toaster } from "sonner";
 import SplashScreen from "@/components/layout/SplashScreen";
 import SettingsOverlay from "@/components/settings/SettingsOverlay";
 import OcrTool from "@/components/tools/OcrTool";
@@ -264,6 +265,9 @@ export default function Home() {
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {/* Toast notifications — slide from right, auto-dismiss 5s */}
+      <Toaster position="top-right" duration={5000} />
     </div>
   );
 }

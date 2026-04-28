@@ -3,6 +3,7 @@
 import { useState, useCallback, useEffect } from "react";
 import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
+import { useOpenRouterKeyStatus } from "@/components/settings/ApiKeysPanel";
 import type { ExportFormat, ProcessingMode } from "@/types";
 
 interface FormatGroup {
@@ -84,9 +85,13 @@ export default function OcrTool() {
     }
     return ["auto"];
   });
-  const [cloudAvailable, setCloudAvailable] = useState(true);
+  const [serverCloudAvailable, setServerCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
+
+  // Cloud mode requires both: the server reports cloud capability AND user has an OpenRouter key.
+  const { hasKey: hasOpenRouterKey } = useOpenRouterKeyStatus();
+  const cloudAvailable = serverCloudAvailable && hasOpenRouterKey;
 
   // Fetch mode availability from server health endpoint
   useEffect(() => {
@@ -95,7 +100,7 @@ export default function OcrTool() {
         const res = await fetch("/api/health");
         if (res.ok) {
           const data = await res.json();
-          setCloudAvailable(data.cloud_available ?? true);
+          setServerCloudAvailable(data.cloud_available ?? true);
           setLocalAvailable(data.local_available ?? true);
           if (!data.local_available && processingMode === "local") {
             if (data.cloud_available) {
@@ -114,6 +119,19 @@ export default function OcrTool() {
     }
     checkModes();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // When the OpenRouter key disappears, fall back to local. When it appears
+  // and local is unavailable, switch to cloud.
+  useEffect(() => {
+    if (!cloudAvailable && processingMode === "cloud" && localAvailable) {
+      setProcessingMode("local");
+      localStorage.setItem("processing_mode", "local");
+    }
+    if (!cloudAvailable && tableMode === "cloud") {
+      setTableMode("local");
+      localStorage.setItem("table_mode", "local");
+    }
+  }, [cloudAvailable, localAvailable, processingMode, tableMode]);
 
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -487,29 +505,28 @@ export default function OcrTool() {
             Processing Mode
           </label>
 
-          {/* Segmented control */}
+          {/* Segmented control — Cloud option only renders when an OpenRouter
+              key is set AND the server reports cloud capability. */}
           <div
             className="mb-3 inline-flex rounded p-0.5"
             style={{ background: 'var(--bg-elevated)' }}
           >
-            <button
-              type="button"
-              onClick={() => {
-                if (cloudAvailable) {
+            {cloudAvailable && (
+              <button
+                type="button"
+                onClick={() => {
                   setProcessingMode("cloud");
                   localStorage.setItem("processing_mode", "cloud");
-                }
-              }}
-              disabled={!cloudAvailable}
-              className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
-              style={{
-                background: processingMode === "cloud" ? 'var(--accent)' : 'transparent',
-                color: processingMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
-                opacity: !cloudAvailable ? 0.4 : 1,
-              }}
-            >
-              Cloud
-            </button>
+                }}
+                className="rounded px-4 py-1.5 text-[13px] font-medium transition-colors"
+                style={{
+                  background: processingMode === "cloud" ? 'var(--accent)' : 'transparent',
+                  color: processingMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                }}
+              >
+                Cloud
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -536,9 +553,14 @@ export default function OcrTool() {
               : "Processed on this device. No data leaves your computer."}
           </p>
 
-          {!cloudAvailable && (
+          {!serverCloudAvailable && (
             <p className="mt-2 text-[11px]" style={{ color: 'var(--warning)' }}>
               Cloud processing is unavailable. Check your internet connection.
+            </p>
+          )}
+          {serverCloudAvailable && !hasOpenRouterKey && (
+            <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
+              Add an OpenRouter API key in Settings to enable cloud processing.
             </p>
           )}
           {!localAvailable && (
@@ -564,24 +586,22 @@ export default function OcrTool() {
                 className="mb-2 inline-flex rounded p-0.5"
                 style={{ background: 'var(--bg-elevated)' }}
               >
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (cloudAvailable) {
+                {cloudAvailable && (
+                  <button
+                    type="button"
+                    onClick={() => {
                       setTableMode("cloud");
                       localStorage.setItem("table_mode", "cloud");
-                    }
-                  }}
-                  disabled={!cloudAvailable}
-                  className="rounded px-3 py-1 text-[11px] font-medium transition-colors"
-                  style={{
-                    background: tableMode === "cloud" ? 'var(--accent)' : 'transparent',
-                    color: tableMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
-                    opacity: !cloudAvailable ? 0.4 : 1,
-                  }}
-                >
-                  Cloud
-                </button>
+                    }}
+                    className="rounded px-3 py-1 text-[11px] font-medium transition-colors"
+                    style={{
+                      background: tableMode === "cloud" ? 'var(--accent)' : 'transparent',
+                      color: tableMode === "cloud" ? 'var(--text-inverse)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    Cloud
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {

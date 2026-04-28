@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
+import ApiKeysPanel from "./ApiKeysPanel";
 
 interface SettingsOverlayProps {
   isOpen: boolean;
@@ -38,6 +39,16 @@ export default function SettingsOverlay({
       // User cancelled or error
     }
   }, []);
+
+  // Escape closes the overlay
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [isOpen, onClose]);
 
   if (!isOpen) return null;
 
@@ -109,6 +120,9 @@ export default function SettingsOverlay({
               </button>
             </div>
           </div>
+
+          {/* API Keys */}
+          <ApiKeysPanel />
 
           {/* App Version */}
           <div>
