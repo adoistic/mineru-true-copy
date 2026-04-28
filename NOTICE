@@ -1,0 +1,95 @@
+MinerU True Copy
+================
+
+Copyright (C) 2026 Siraj Khan and contributors.
+
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License version 3 as
+published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful, but
+WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
+or FITNESS FOR A PARTICULAR PURPOSE. See the GNU AGPL-3.0 for details.
+
+The full license text is in the LICENSE file at the root of this
+repository.
+
+Why AGPL-3.0
+------------
+
+This project patches MinerU's internals at runtime (see lib/patch_mineru.py)
+and is therefore a derivative work of MinerU. MinerU is licensed under
+AGPL-3.0, so this project inherits AGPL-3.0. The license is forced by
+upstream, not chosen.
+
+If you run a modified version of this software as a network service, AGPL
+§13 requires you to offer the corresponding source code to your users.
+
+
+Third-Party Components
+======================
+
+This software incorporates the following third-party components. Each
+component is the property of its respective copyright holder and is
+distributed under the terms of its own license.
+
+
+MinerU
+------
+- Upstream: https://github.com/opendatalab/MinerU
+- License:  GNU Affero General Public License v3.0 (AGPL-3.0)
+- Use:      PDF layout analysis, OCR pipeline, document parsing.
+- Notes:    lib/patch_mineru.py monkey-patches MinerU internals at runtime;
+            this entire project is a derivative work and inherits AGPL-3.0
+            from MinerU.
+
+
+IndicTrans2
+-----------
+- Upstream: https://github.com/AI4Bharat/IndicTrans2
+- Maintainer: AI4Bharat (IIT Madras)
+- License:  Apache License, Version 2.0
+- Use:      Indic-language machine translation sidecar (translation_server.py).
+- Notes:    Apple Silicon MPS batching tuning is local to this project; the
+            model weights and inference code are upstream.
+
+
+PaddleOCR
+---------
+- Upstream: https://github.com/PaddlePaddle/PaddleOCR
+- Maintainer: PaddlePaddle (Baidu)
+- License:  Apache License, Version 2.0
+- Use:      Local OCR backend (used by MinerU when cloud OCR is disabled).
+
+
+font_classifier (font-identifier)
+---------------------------------
+- Upstream: https://github.com/gaborcselle/font-identifier
+- Author:   Gabor Cselle
+- License:  MIT License
+- Use:      ONNX model for font family classification on rasterized text
+            spans (lib/font_classifier.py).
+
+
+Noto Sans
+---------
+- Upstream: https://fonts.google.com/noto
+- Maintainer: Google Fonts / Noto Project
+- License:  SIL Open Font License, Version 1.1 (OFL-1.1)
+- Use:      Bundled font for true-copy rendering across scripts.
+
+
+Geist
+-----
+- Upstream: https://vercel.com/font
+- Maintainer: Vercel
+- License:  SIL Open Font License, Version 1.1 (OFL-1.1)
+- Use:      UI typeface for the Tauri/Next.js desktop application.
+
+
+Tauri, Next.js, React, and other npm/cargo dependencies are listed in
+package.json, app/package.json, and src-tauri/Cargo.toml. Each retains
+its own license; consult the respective package metadata for the exact
+terms. The licenses above are the ones with non-trivial integration into
+this project's source code (patches, bundled assets, model weights, or
+prominent UI surface).
