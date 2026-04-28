@@ -1,6 +1,6 @@
 /**
  * Translation Pipeline: OCR JSON → Translation Server → translated JSON
- * Handles translation submission, progress tracking, and credit deduction.
+ * Handles translation submission and progress tracking.
  */
 import { Job, PipelineProgress } from '@/types';
 import { Pipeline, PipelineResult } from './types';
@@ -82,15 +82,10 @@ export class TranslationPipeline implements Pipeline {
       message: 'Translation complete',
     });
 
-    // Credits: 2 per page per language
-    const pageCount = job.total_pages || 1;
-    const creditsCharged = pageCount * totalLangs * 2;
-
     return {
       success: true,
       completedPages: totalLangs,
       totalPages: totalLangs,
-      creditsCharged,
       outputFiles,
     };
   }

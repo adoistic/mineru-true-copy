@@ -10,11 +10,6 @@ import os from 'os';
 
 export async function POST(request: Request) {
   try {
-    const keyId = request.headers.get('x-key-id');
-    if (!keyId) {
-      return Response.json({ error: 'Missing x-key-id header' }, { status: 401 });
-    }
-
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const configStr = formData.get('config') as string | null;
@@ -57,7 +52,6 @@ export async function POST(request: Request) {
       job_type: jobType,
       tool_config: { ...config, output_folder: outputFolder },
       total_pages: totalPages,
-      credits_reserved: 0,
       output_folder: outputFolder,
     });
 
@@ -69,7 +63,6 @@ export async function POST(request: Request) {
       jobType,
       toolConfig: { ...config, output_folder: outputFolder },
       totalPages,
-      keyId,
       outputFolder,
       existingJobId: job.id,
     });

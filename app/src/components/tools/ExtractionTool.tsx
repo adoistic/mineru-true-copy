@@ -126,7 +126,6 @@ export default function ExtractionTool() {
     setJobIds([]);
     setJobFileNames([]);
 
-    const keyId = localStorage.getItem("key_id") ?? "";
     const ids: string[] = [];
     const names: string[] = [];
 
@@ -147,7 +146,6 @@ export default function ExtractionTool() {
 
         const res = await fetch("/api/jobs", {
           method: "POST",
-          headers: { "x-key-id": keyId },
           body: formData,
         });
 

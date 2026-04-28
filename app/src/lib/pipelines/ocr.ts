@@ -94,7 +94,6 @@ export class OcrPipeline implements Pipeline {
       success: true,
       completedPages: actualPages,
       totalPages: actualPages,
-      creditsCharged: actualPages, // 1 credit per page
       outputFiles,
     };
   }

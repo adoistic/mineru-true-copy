@@ -115,7 +115,6 @@ export class ExtractionPipeline implements Pipeline {
       success: true,
       completedPages: pageImages.length,
       totalPages: pageImages.length,
-      creditsCharged: 1, // 1 credit flat
       outputFiles,
     };
   }

@@ -154,9 +154,6 @@ export default function TranslationTool() {
       : ""
   );
 
-  // --- Credits ---
-  const [creditBalance, setCreditBalance] = useState(0);
-
   // --- Processing state ---
   const [processing, setProcessing] = useState(false);
   const [progressMessage, setProgressMessage] = useState("");
@@ -254,22 +251,6 @@ export default function TranslationTool() {
     };
   }, [modelVariant]);
 
-  // Fetch credit balance
-  useEffect(() => {
-    async function fetchCredits() {
-      const keyId = typeof window !== "undefined" ? localStorage.getItem("key_id") : null;
-      if (!keyId) return;
-      try {
-        const res = await fetch(`/api/credits?key_id=${keyId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setCreditBalance(data.balance?.balance ?? 0);
-        }
-      } catch {}
-    }
-    fetchCredits();
-  }, []);
-
   // --- File handling ---
   const processFile = useCallback(async (file: File) => {
     setFileError(null);
@@ -338,14 +319,6 @@ export default function TranslationTool() {
       return next;
     });
   }, []);
-
-  // --- Credit estimate ---
-  const creditEstimate = useMemo(() => {
-    if (pageCount === 0 || selectedLangs.size === 0) return null;
-    return pageCount * selectedLangs.size * 2; // 2 credits/page/language
-  }, [pageCount, selectedLangs.size]);
-
-  const insufficientCredits = creditEstimate !== null && creditEstimate > creditBalance;
 
   // --- Selected language labels for button ---
   const selectedLangLabels = useMemo(() => {
@@ -764,7 +737,6 @@ export default function TranslationTool() {
   const canTranslate =
     hasInput &&
     selectedLangs.size > 0 &&
-    !insufficientCredits &&
     !modelNotInstalled &&
     (mode === 'folder' ? sourceFolder.length > 0 : outputFolder.length > 0);
 
@@ -1275,21 +1247,6 @@ export default function TranslationTool() {
         >
           {error}
         </p>
-      )}
-
-      {/* Credit estimate */}
-      {creditEstimate !== null && jsonData && (
-        <div
-          className="flex items-center justify-between text-[11px]"
-          style={{ color: insufficientCredits ? "var(--error)" : "var(--text-secondary)" }}
-        >
-          <span>
-            2 credits/page/language &middot; Est. {creditEstimate} credit{creditEstimate !== 1 ? "s" : ""} for {pageCount} page{pageCount !== 1 ? "s" : ""} &times; {selectedLangs.size} language{selectedLangs.size !== 1 ? "s" : ""}
-          </span>
-          {insufficientCredits && (
-            <span style={{ color: "var(--error)" }}>Insufficient credits</span>
-          )}
-        </div>
       )}
 
       {/* Translate button */}

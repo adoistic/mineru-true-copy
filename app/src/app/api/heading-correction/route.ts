@@ -5,7 +5,7 @@ import { headingCorrectionPipeline } from '@/lib/pipelines/heading-correction';
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { job_id, key_id } = body;
+    const { job_id } = body;
 
     if (!job_id) {
       return Response.json(
@@ -26,8 +26,6 @@ export async function POST(request: Request) {
       );
     }
 
-    const effectiveKeyId = key_id || request.headers.get('x-key-id') || '';
-
     const { job, result } = await runPipeline({
       pipeline: headingCorrectionPipeline,
       filePath: originalJob.file_path,
@@ -35,7 +33,6 @@ export async function POST(request: Request) {
       jobType: 'heading_correction',
       toolConfig: originalJob.tool_config,
       totalPages: originalJob.total_pages,
-      keyId: effectiveKeyId,
       outputFolder: originalJob.output_folder,
     });
 

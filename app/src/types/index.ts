@@ -2,8 +2,7 @@
 
 export type JobType = 'ocr' | 'extract' | 'heading_correction' | 'wizard' | 'translate';
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'retrying' | 'permanently_failed';
-export type PipelineErrorType = 'mineru_crash' | 'llm_api_error' | 'rate_limited' | 'insufficient_credits' | 'key_expired' | 'partial_failure' | 'network_error';
-export type KeyStatus = 'active' | 'revoked' | 'expired';
+export type PipelineErrorType = 'mineru_crash' | 'llm_api_error' | 'rate_limited' | 'partial_failure' | 'network_error';
 export type ProcessingMode = 'local' | 'cloud';
 export type ExportFormat = 'html' | 'markdown' | 'searchable_pdf' | 'epub' | 'json' | 'csv' | 'docx' | 'true_copy_html' | 'true_copy_docx' | 'true_copy_pptx' | 'true_copy_pdf' | 'reflowed_docx' | 'reflowed_pdf' | 'zip';
 
@@ -20,37 +19,10 @@ export interface Job {
   error_message: string | null;
   error_type: PipelineErrorType | null;
   retry_count: number;
-  credits_reserved: number;
-  credits_charged: number;
   total_pages: number;
   completed_pages: number;
   output_folder: string;
   output_files?: string[];
-}
-
-export interface ActivationKey {
-  key: string;
-  client_label: string;
-  credit_balance: number;
-  credits_reserved: number;
-  can_whitelabel: boolean;
-  status: KeyStatus;
-  device_id: string | null;
-  app_name: string | null;
-  created_at: string;
-  expires_at: string;
-  updated_at: string;
-}
-
-export interface UsageLog {
-  key_id: string;
-  job_type: JobType;
-  file_name: string;
-  pages_processed: number;
-  credits_charged: number;
-  status: 'success' | 'partial' | 'failed';
-  error_message: string | null;
-  timestamp: string;
 }
 
 export interface SchemaTemplate {
@@ -129,14 +101,6 @@ export interface PipelineProgress {
   message?: string;
 }
 
-export interface CreditReservation {
-  reservation_id: string;
-  key_id: string;
-  amount: number;
-  job_id: string;
-  created_at: string;
-}
-
 export interface ProcessingOptions {
   remove_headers_footers: boolean;
   remove_metadata: boolean;
@@ -161,14 +125,6 @@ export interface ExtractionOptions {
   prompt: string;
   output_formats: ('json' | 'csv')[];
   output_folder: string;
-}
-
-export interface WhiteLabelConfig {
-  enabled: boolean;
-  logo_path?: string;
-  brand_color?: string;
-  app_name?: string;
-  mode?: 'light' | 'dark';
 }
 
 // ---------------------------------------------------------------------------

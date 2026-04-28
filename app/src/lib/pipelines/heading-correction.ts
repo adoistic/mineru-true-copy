@@ -312,7 +312,6 @@ export class HeadingCorrectionPipeline implements Pipeline {
           success: true,
           completedPages: job.total_pages,
           totalPages: job.total_pages,
-          creditsCharged: 0,
           outputFiles: [],
         };
       }
@@ -370,7 +369,6 @@ export class HeadingCorrectionPipeline implements Pipeline {
         success: true,
         completedPages: job.total_pages,
         totalPages: job.total_pages,
-        creditsCharged: 0, // Heading correction is part of OCR, no extra credits
         outputFiles,
       };
     } catch (error) {
@@ -379,7 +377,6 @@ export class HeadingCorrectionPipeline implements Pipeline {
         success: false,
         completedPages: 0,
         totalPages: job.total_pages,
-        creditsCharged: 0,
         error: pipelineError,
       };
     }

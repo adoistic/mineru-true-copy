@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import ActivationScreen from "@/components/layout/ActivationScreen";
+import { useState, useEffect } from "react";
 import SplashScreen from "@/components/layout/SplashScreen";
 import SettingsOverlay from "@/components/settings/SettingsOverlay";
 import OcrTool from "@/components/tools/OcrTool";
@@ -78,50 +77,17 @@ const TOOLS: ToolDef[] = [
 ];
 
 export default function Home() {
-  const [keyId, setKeyId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
   const [enginesReady, setEnginesReady] = useState(false);
   const [activeTool, setActiveTool] = useState<ToolId>("ocr");
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [creditBalance, setCreditBalance] = useState(0);
   const [mineruStatus, setMineruStatus] = useState<"green" | "yellow" | "red">(
     "yellow"
   );
   const [translationStatus, setTranslationStatus] = useState<"green" | "red">("red");
   const [activeJobs, setActiveJobs] = useState(0);
 
-  // Check activation on mount
-  useEffect(() => {
-    const stored = localStorage.getItem("key_id");
-    if (stored) setKeyId(stored);
-    setLoading(false);
-  }, []);
-
-  // Poll credit balance
-  useEffect(() => {
-    if (!keyId) return;
-
-    const fetchCredits = async () => {
-      try {
-        const res = await fetch(`/api/credits?key_id=${keyId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setCreditBalance(data.balance?.balance ?? 0);
-        }
-      } catch {
-        // Silently ignore
-      }
-    };
-
-    fetchCredits();
-    const interval = setInterval(fetchCredits, 30000);
-    return () => clearInterval(interval);
-  }, [keyId]);
-
   // Poll MinerU status and active jobs
   useEffect(() => {
-    if (!keyId) return;
-
     const fetchStatus = async () => {
       try {
         const res = await fetch("/api/status");
@@ -145,28 +111,7 @@ export default function Home() {
     fetchStatus();
     const interval = setInterval(fetchStatus, 10000);
     return () => clearInterval(interval);
-  }, [keyId]);
-
-  const handleActivated = useCallback((id: string) => {
-    setKeyId(id);
   }, []);
-
-  const handleDeactivate = useCallback(() => {
-    setKeyId(null);
-    setSettingsOpen(false);
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="flex min-h-screen items-center justify-center" style={{ background: 'var(--bg-app)' }}>
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#333] border-t-accent" />
-      </div>
-    );
-  }
-
-  if (!keyId) {
-    return <ActivationScreen onActivated={handleActivated} />;
-  }
 
   if (!enginesReady) {
     return <SplashScreen onReady={() => setEnginesReady(true)} />;
@@ -199,30 +144,6 @@ export default function Home() {
         </div>
 
         <div className="flex items-center gap-3">
-          {/* Credits badge */}
-          <div
-            className="flex items-center gap-1.5 rounded px-2 py-1"
-            style={{ background: 'var(--bg-elevated)' }}
-          >
-            <svg
-              className="h-3.5 w-3.5"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke="currentColor"
-              strokeWidth={2}
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M20.25 6.375c0 2.278-3.694 4.125-8.25 4.125S3.75 8.653 3.75 6.375m16.5 0c0-2.278-3.694-4.125-8.25-4.125S3.75 4.097 3.75 6.375m16.5 0v11.25c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125V6.375m16.5 0v3.75m-16.5-3.75v3.75m16.5 0v3.75C20.25 16.153 16.556 18 12 18s-8.25-1.847-8.25-4.125v-3.75m16.5 0c0 2.278-3.694 4.125-8.25 4.125s-8.25-1.847-8.25-4.125"
-              />
-            </svg>
-            <span className="text-[11px] font-medium" style={{ color: 'var(--text-secondary)' }}>
-              {creditBalance.toLocaleString()}
-            </span>
-          </div>
-
           {/* Settings gear */}
           <button
             onClick={() => setSettingsOpen(true)}
@@ -342,8 +263,6 @@ export default function Home() {
       <SettingsOverlay
         isOpen={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        creditBalance={creditBalance}
-        onDeactivate={handleDeactivate}
       />
     </div>
   );

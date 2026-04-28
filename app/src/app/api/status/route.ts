@@ -1,4 +1,3 @@
-import { checkHealth } from '@/lib/mineru/client';
 import { getActiveJobs } from '@/lib/db/sqlite';
 
 export async function GET() {

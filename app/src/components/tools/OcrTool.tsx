@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useMemo } from "react";
+import { useState, useCallback, useEffect } from "react";
 import FileDropZone from "@/components/common/FileDropZone";
 import JobProgress from "@/components/processing/JobProgress";
 import type { ExportFormat, ProcessingMode } from "@/types";
@@ -87,7 +87,6 @@ export default function OcrTool() {
   const [cloudAvailable, setCloudAvailable] = useState(true);
   const [localAvailable, setLocalAvailable] = useState(true);
   const [jobIds, setJobIds] = useState<string[]>([]);
-  const [creditBalance, setCreditBalance] = useState(0);
   const [pageCount, setPageCount] = useState<number | null>(null);
 
   // Fetch mode availability from server health endpoint
@@ -117,22 +116,6 @@ export default function OcrTool() {
     checkModes();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch credit balance for estimate
-  useEffect(() => {
-    async function fetchCredits() {
-      const keyId = typeof window !== "undefined" ? localStorage.getItem("key_id") : null;
-      if (!keyId) return;
-      try {
-        const res = await fetch(`/api/credits?key_id=${keyId}`);
-        if (res.ok) {
-          const data = await res.json();
-          setCreditBalance(data.balance?.balance ?? 0);
-        }
-      } catch {}
-    }
-    fetchCredits();
-  }, []);
-
   // Estimate page count when files change
   useEffect(() => {
     if (files.length === 0) {
@@ -146,13 +129,6 @@ export default function OcrTool() {
     }, 0);
     setPageCount(estimated);
   }, [files]);
-
-  // Credit estimate
-  const creditEstimate = useMemo(() => {
-    if (pageCount === null || pageCount === 0) return null;
-    const perPage = processingMode === "cloud" ? 1 : 0.25;
-    return Math.ceil(pageCount * perPage);
-  }, [pageCount, processingMode]);
 
   const [jobFileNames, setJobFileNames] = useState<string[]>([]);
   const [processing, setProcessing] = useState(false);
@@ -180,7 +156,6 @@ export default function OcrTool() {
     setJobIds([]);
     setJobFileNames([]);
 
-    const keyId = localStorage.getItem("key_id") ?? "";
     const ids: string[] = [];
     const names: string[] = [];
 
@@ -208,7 +183,6 @@ export default function OcrTool() {
 
         const res = await fetch("/api/jobs", {
           method: "POST",
-          headers: { "x-key-id": keyId },
           body: formData,
         });
 
@@ -379,8 +353,6 @@ export default function OcrTool() {
       </div>
     );
   }
-
-  const insufficientCredits = creditEstimate !== null && creditEstimate > creditBalance;
 
   return (
     <div className="space-y-6">
@@ -575,8 +547,8 @@ export default function OcrTool() {
 
           <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
             {processingMode === "cloud"
-              ? "Document sent to secure cloud for processing. Best for degraded scans, handwriting. 1 credit/page."
-              : "Processed on this device. No data leaves your computer. 0.25 credits/page."}
+              ? "Document sent to secure cloud for processing. Best for degraded scans, handwriting."
+              : "Processed on this device. No data leaves your computer."}
           </p>
 
           {!cloudAvailable && (
@@ -643,8 +615,8 @@ export default function OcrTool() {
 
               <p className="text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
                 {tableMode === "cloud"
-                  ? "Tables sent to cloud for higher accuracy. +0.5 credits/page with tables."
-                  : "Tables processed locally. No additional credits."}
+                  ? "Tables sent to cloud for higher accuracy."
+                  : "Tables processed locally."}
               </p>
             </div>
           )}
@@ -939,22 +911,10 @@ export default function OcrTool() {
         </p>
       )}
 
-      {/* Credit estimate */}
-      {creditEstimate !== null && files.length > 0 && (
-        <div className="flex items-center justify-between text-[11px]" style={{ color: insufficientCredits ? 'var(--error)' : 'var(--text-secondary)' }}>
-          <span>
-            Est. {creditEstimate} credit{creditEstimate !== 1 ? "s" : ""} for ~{pageCount} page{pageCount !== 1 ? "s" : ""}
-          </span>
-          {insufficientCredits && (
-            <span style={{ color: 'var(--error)' }}>Insufficient credits</span>
-          )}
-        </div>
-      )}
-
       {/* Process button */}
       <button
         onClick={handleProcess}
-        disabled={files.length === 0 || selectedFormats.size === 0 || insufficientCredits}
+        disabled={files.length === 0 || selectedFormats.size === 0}
         className="w-full rounded py-2 text-[13px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40"
         style={{
           background: 'var(--accent)',

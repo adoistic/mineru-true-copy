@@ -5,29 +5,17 @@ import { useState, useCallback } from "react";
 interface SettingsOverlayProps {
   isOpen: boolean;
   onClose: () => void;
-  creditBalance: number;
-  onDeactivate: () => void;
 }
 
 export default function SettingsOverlay({
   isOpen,
   onClose,
-  creditBalance,
-  onDeactivate,
 }: SettingsOverlayProps) {
   const [outputFolder, setOutputFolder] = useState(() =>
     typeof window !== "undefined"
       ? localStorage.getItem("default_output_folder") ?? ""
       : ""
   );
-  const [confirmDeactivate, setConfirmDeactivate] = useState(false);
-
-  const maskedKey = useCallback(() => {
-    const keyId = typeof window !== "undefined" ? localStorage.getItem("key_id") : null;
-    if (!keyId) return "----";
-    const clean = keyId.replace(/-/g, "");
-    return "****-****-****-" + clean.slice(-4).toUpperCase();
-  }, []);
 
   const handleOutputFolderChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -50,15 +38,6 @@ export default function SettingsOverlay({
       // User cancelled or error
     }
   }, []);
-
-  const handleDeactivate = useCallback(() => {
-    if (!confirmDeactivate) {
-      setConfirmDeactivate(true);
-      return;
-    }
-    localStorage.removeItem("key_id");
-    onDeactivate();
-  }, [confirmDeactivate, onDeactivate]);
 
   if (!isOpen) return null;
 
@@ -96,32 +75,6 @@ export default function SettingsOverlay({
         </div>
 
         <div className="space-y-5">
-          {/* Activation Key */}
-          <div>
-            <label
-              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              Activation Key
-            </label>
-            <p className="font-mono text-[13px]" style={{ color: 'var(--text-secondary)' }}>
-              {maskedKey()}
-            </p>
-          </div>
-
-          {/* Credit Balance */}
-          <div>
-            <label
-              className="mb-1 block text-[11px] font-medium uppercase tracking-[0.05em]"
-              style={{ color: 'var(--text-secondary)' }}
-            >
-              Credit Balance
-            </label>
-            <p className="text-[20px] font-semibold" style={{ color: 'var(--accent)' }}>
-              {creditBalance.toLocaleString()}
-            </p>
-          </div>
-
           {/* Default Output Folder */}
           <div>
             <label
@@ -166,30 +119,8 @@ export default function SettingsOverlay({
               Version
             </label>
             <p className="text-[13px]" style={{ color: 'var(--text-tertiary)' }}>
-              DocTransform v1.0.0
+              MinerU True Copy v1.0.0
             </p>
-          </div>
-
-          {/* Deactivate */}
-          <div style={{ borderTop: '1px solid var(--border-default)', paddingTop: '16px' }}>
-            <button
-              onClick={handleDeactivate}
-              className="rounded px-4 py-2 text-[13px] font-medium transition-colors"
-              style={{
-                background: confirmDeactivate ? 'var(--error)' : 'transparent',
-                color: confirmDeactivate ? '#fff' : 'var(--error)',
-                border: confirmDeactivate ? 'none' : '1px solid rgba(244,63,94,0.3)',
-              }}
-            >
-              {confirmDeactivate
-                ? "Confirm Deactivation"
-                : "Deactivate This Device"}
-            </button>
-            {confirmDeactivate && (
-              <p className="mt-2 text-[11px]" style={{ color: 'var(--text-tertiary)' }}>
-                This will remove your activation key from this device. You can reactivate later.
-              </p>
-            )}
           </div>
         </div>
       </div>

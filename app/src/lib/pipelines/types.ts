@@ -4,7 +4,6 @@ export interface PipelineResult {
   success: boolean;
   completedPages: number;
   totalPages: number;
-  creditsCharged: number;
   error?: PipelineError;
   outputFiles?: string[];
 }
@@ -29,12 +28,6 @@ export function classifyError(error: Error): PipelineError {
   }
   if (msg.includes('rate limit') || msg.includes('429')) {
     return { type: 'rate_limited', message: error.message, retryable: true };
-  }
-  if (msg.includes('insufficient credits')) {
-    return { type: 'insufficient_credits', message: error.message, retryable: false };
-  }
-  if (msg.includes('key') && (msg.includes('expired') || msg.includes('revoked'))) {
-    return { type: 'key_expired', message: error.message, retryable: false };
   }
   if (msg.includes('network') || msg.includes('econnreset') || msg.includes('timeout') || msg.includes('fetch failed')) {
     return { type: 'network_error', message: error.message, retryable: true };

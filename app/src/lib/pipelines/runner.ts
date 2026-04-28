@@ -1,13 +1,12 @@
 /**
- * Shared PipelineRunner: handles job lifecycle, credit reservation/refund,
- * progress events, retry logic, and error classification.
+ * Shared PipelineRunner: handles job lifecycle, progress events,
+ * retry logic, and error classification.
  */
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { Job, PipelineProgress, JobType } from '@/types';
 import { createJob, updateJobStatus, getJob } from '@/lib/db/sqlite';
-import { reserveCredits, finalizeCredits, calculateCredits } from '@/lib/firebase/credits';
 import { Pipeline, PipelineResult, classifyError } from './types';
 
 const MAX_RETRIES = 2;
@@ -50,30 +49,15 @@ export async function runPipeline(params: {
   jobType: JobType;
   toolConfig: Record<string, unknown>;
   totalPages: number;
-  keyId: string;
   outputFolder: string;
-  languageCount?: number;
   existingJobId?: string;
 }): Promise<{ job: Job; result: PipelineResult }> {
-  const { pipeline, filePath, fileName, jobType, toolConfig, totalPages, keyId, outputFolder, languageCount, existingJobId } = params;
-
-  // Calculate and reserve credits
-  const creditsNeeded = calculateCredits(jobType, totalPages, { languageCount });
-  const reservation = await reserveCredits(keyId, creditsNeeded, '');
-
-  if (!reservation.success) {
-    if (existingJobId) {
-      updateJobStatus(existingJobId, 'failed', {
-        error_message: reservation.error || 'Failed to reserve credits',
-      });
-    }
-    throw new Error(reservation.error || 'Failed to reserve credits');
-  }
+  const { pipeline, filePath, fileName, jobType, toolConfig, totalPages, outputFolder, existingJobId } = params;
 
   // Use existing job or create new one
   let job: Job;
   if (existingJobId) {
-    updateJobStatus(existingJobId, 'queued', { credits_reserved: creditsNeeded });
+    updateJobStatus(existingJobId, 'queued');
     job = getJob(existingJobId)!;
   } else {
     job = createJob({
@@ -82,7 +66,6 @@ export async function runPipeline(params: {
       job_type: jobType,
       tool_config: toolConfig,
       total_pages: totalPages,
-      credits_reserved: creditsNeeded,
       output_folder: outputFolder,
     });
   }
@@ -129,7 +112,6 @@ export async function runPipeline(params: {
         success: false,
         completedPages: 0,
         totalPages,
-        creditsCharged: 0,
         error: pipelineError,
       };
       break;
@@ -137,32 +119,13 @@ export async function runPipeline(params: {
   }
 
   if (!result) {
-    result = { success: false, completedPages: 0, totalPages, creditsCharged: 0 };
+    result = { success: false, completedPages: 0, totalPages };
   }
-
-  // Finalize credits
-  const finalStatus = result.success
-    ? 'success' as const
-    : result.completedPages > 0
-      ? 'partial' as const
-      : 'failed' as const;
-
-  await finalizeCredits(keyId, {
-    jobId: job.id,
-    creditsReserved: creditsNeeded,
-    creditsCharged: result.creditsCharged,
-    jobType,
-    fileName,
-    pagesProcessed: result.completedPages,
-    status: finalStatus,
-    errorMessage: result.error?.message,
-  });
 
   // Update job final status (including output file paths)
   const jobStatus = result.success ? 'completed' : result.completedPages > 0 ? 'completed' : 'failed';
   updateJobStatus(job.id, jobStatus as Job['status'], {
     completed_pages: result.completedPages,
-    credits_charged: result.creditsCharged,
     error_message: result.error?.message ?? null,
     error_type: result.error?.type ?? null,
     output_files: result.outputFiles ?? [],

@@ -406,9 +406,9 @@ _gpu_lock = threading.Lock()
 _server_status = "warming"
 
 # ---------------------------------------------------------------------------
-# Error code system (white-labeled with developer breadcrumbs)
+# Error code system with developer breadcrumbs
 # ---------------------------------------------------------------------------
-# Prefixes: CP=Cloud Processing, LP=Local Processing, CT=Cloud Tables, CR=Credits
+# Prefixes: CP=Cloud Processing, LP=Local Processing, CT=Cloud Tables
 # Suffixes: HTTP status or error category
 # User sees clean copy + error code. Developer decodes from prefix.
 
@@ -450,15 +450,13 @@ ERROR_MESSAGES = {
     'LP-MDL': 'Local processing needs to be set up. Please reinstall the application or contact support.',
     'LP-OOM': 'This document is too large for local processing. Try Cloud Processing for large or complex documents.',
     'CT-503': 'Cloud table extraction is unavailable. Tables will be processed locally with reduced accuracy.',
-    'CR-INS': 'Not enough credits for this operation.',
-    'CR-ERR': 'Unable to verify your credit balance. Please check your connection and try again.',
 }
 
 
 def _make_error(code: str, diagnostic: str = '', **extra) -> dict:
-    """Build a structured error response with white-labeled message + developer diagnostic.
+    """Build a structured error response with user-friendly message + developer diagnostic.
 
-    The 'message' is safe to show to end users (no engine names).
+    The 'message' is safe to show to end users.
     The 'diagnostic' carries internal details for developer debugging (DOM data attribute).
     """
     return {
@@ -1311,7 +1309,7 @@ def process_pdf(task_id: str, pdf_bytes: bytes, file_name: str, config: dict | N
         logger.error('Task %s exception:\n%s', task_id, tb_str,
                      extra={'task_id': task_id, 'error': str(e)})
 
-        # Classify error into white-labeled error code
+        # Classify error into structured error code
         err_str = str(e).lower()
         tb_lower = tb_str.lower()
         _config = config or {}
