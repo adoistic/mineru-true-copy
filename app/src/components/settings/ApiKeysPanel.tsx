@@ -9,13 +9,22 @@ const STORE_KEY = "openrouter_api_key";
 const MIN_KEY_LENGTH = 10;
 
 // ─── Cross-component subscription so OcrTool can react to key changes ────
+//
+// Design note: this is a minimal in-process pub/sub. It assumes a single
+// writer (this panel) and reader(s) that only need to know "is a key set?".
+// The cache primes on the first hook mount that successfully reads the
+// store, so opening Settings is not required for OcrTool to learn the
+// initial state. Anyone adding a second writer should consolidate writes
+// through emitKeyState so all listeners observe the same view.
 
 type Listener = (hasKey: boolean) => void;
 const listeners = new Set<Listener>();
 let cachedHasKey = false;
+let cachePrimed = false;
 
 function emitKeyState(hasKey: boolean) {
   cachedHasKey = hasKey;
+  cachePrimed = true;
   listeners.forEach((fn) => fn(hasKey));
 }
 
@@ -40,8 +49,13 @@ export function useOpenRouterKeyStatus(): {
         const value = await store.get<string>(STORE_KEY);
         const has = typeof value === "string" && value.length > 0;
         if (!cancelled) {
-          cachedHasKey = has;
-          setState({ hasKey: has, isLoading: false });
+          // Prime the shared cache so the next hook mount renders the
+          // correct value synchronously (and other listeners see it).
+          if (!cachePrimed) emitKeyState(has);
+          else {
+            cachedHasKey = has;
+            setState({ hasKey: has, isLoading: false });
+          }
         }
       } catch {
         if (!cancelled) setState({ hasKey: false, isLoading: false });

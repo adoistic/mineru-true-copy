@@ -1,6 +1,6 @@
 {
   "identifier": "default",
-  "description": "Default permissions for DocTransform",
+  "description": "Default permissions for MinerU True Copy",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -8,6 +8,7 @@
     "shell:allow-execute",
     "shell:default",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "store:default"
   ]
 }
