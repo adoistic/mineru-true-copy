@@ -22,7 +22,6 @@
     "dompurify": "^3.3.3",
     "dotenv": "^17.4.0",
     "epub-gen-memory": "^1.1.2",
-    "firebase-admin": "^13.7.0",
     "jsdom": "^29.0.1",
     "katex": "^0.16.44",
     "markdown-it": "^14.1.1",

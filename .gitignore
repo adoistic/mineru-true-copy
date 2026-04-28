@@ -25,3 +25,10 @@ src-tauri/resources/node-runtime/
 src-tauri/resources/models/
 app/.claude/
 app/.cache/
+
+# Internal pre-strip notes (CLAUDE.md, DESIGN.md, TODOS.md). Kept locally
+# for reference; not tracked because they describe a closed-source state
+# (activation keys, credit ledger, white-label rules) that no longer
+# matches the public AGPL release. Public docs live at the repo root and
+# in docs/ (not docs/internal/).
+docs/internal/

@@ -73,10 +73,10 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 - [x] **T1.** Hard deletions. `admin/`, `app/src/lib/firebase/`, `app/src/lib/db/sqlite.ts` (later restored stripped), `app/src/app/api/{keys,credits}/`, the activation screen.
 - [x] **T2.** Surgical strip across `runner.ts`, the pipeline modules, settings overlay, env config, and the white-label filters in `mineru_server.py`. Sanitize `.env.example`.
-- [ ] **T3.** Hardening of `mineru_server.py`. RotatingFileHandler at 50MB times 3. Demote per-page debug `print` calls to `logger.debug`. Sweep `/tmp/mineru_*` orphans on boot. Disk-space safeguard returns HTTP 507 if `/tmp` falls below 2GB. Pre-warm failure exits the process. Three pytest regressions cover the lot.
-- [ ] **T4.** ApiKeysPanel in Settings. OpenRouter key persists via `tauri-plugin-store`. Six explicit states (unset, typing, saving, set, editing, error). `sonner` toasts. Cloud OCR option in the mode selector binds reactively to "is key set".
-- [ ] **T5.** About screen in Settings. AGPL-3.0 notice, third-party attribution table, View Source link. Status bar gets a `v0.1.0 · AGPL-3.0` indicator that opens the About section in one click.
-- [ ] **T6.** Smoke test for `runner.ts` confirming pipeline output is byte-identical pre and post strip.
+- [x] **T3.** Hardening of `mineru_server.py`. RotatingFileHandler at 50MB times 3. Demote per-page debug `print` calls to `logger.debug`. Sweep `/tmp/mineru_*` orphans on boot. Disk-space safeguard returns HTTP 507 if `/tmp` falls below 2GB. Pre-warm failure exits the process. Three pytest regressions cover the lot.
+- [x] **T4.** ApiKeysPanel in Settings. OpenRouter key persists via `tauri-plugin-store`. Six explicit states (unset, typing, saving, set, editing, error). `sonner` toasts. Cloud OCR option in the mode selector binds reactively to "is key set".
+- [x] **T5.** About screen in Settings. AGPL-3.0 notice, third-party attribution table, View Source link. Status bar gets a `v0.1.0 · AGPL-3.0` indicator that opens the About section in one click.
+- [x] **T6.** Smoke test for `runner.ts` confirming the pipeline runs clean post-strip with a static guard against any return of credit or Firebase symbols.
 
 ### Phase 2: Refactor `mineru_server.py` (deferred to v0.2)
 
