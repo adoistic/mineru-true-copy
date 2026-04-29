@@ -119,7 +119,7 @@ cargo check
    git checkout main && git pull
    git checkout -b type/short-description
    ```
-2. Follow `.github/PULL_REQUEST_TEMPLATE.md` when opening your PR (file created in T9).
+2. Follow `.github/PULL_REQUEST_TEMPLATE.md` when opening your PR.
 3. Link the relevant issue in the PR body (`Closes #N`).
 4. If your change adds a new third-party library, update `NOTICE` with the package name, license, and copyright holder. See the existing entries in `NOTICE` for the format — the AGPL copyleft rationale is documented there.
 5. All four test commands in section 3 must be green.
@@ -128,7 +128,7 @@ cargo check
 
 ## 5. CI secrets for signed macOS builds
 
-`ci.yml` (`.github/workflows/ci.yml`, created in T6) uses `tauri-apps/tauri-action`. For signed and notarized macOS builds the runner needs these repository secrets:
+`ci.yml` (`.github/workflows/ci.yml`) uses `tauri-apps/tauri-action`. For signed and notarized macOS builds the runner needs these repository secrets:
 
 **Code signing**
 | Secret | Description |
