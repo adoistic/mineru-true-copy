@@ -117,7 +117,7 @@ jobs:
           FOUND=0
 
           echo "=== Checking: firebase (case-insensitive) ==="
-          if grep -rwni -w \
+          if grep -rwni \
                --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \

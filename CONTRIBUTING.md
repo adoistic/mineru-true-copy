@@ -148,6 +148,8 @@ Alternatively, notarization can use the App Store Connect API key set (`APPLE_AP
 
 Source: https://v2.tauri.app/distribute/sign/macos/ — the `tauri-action` `action.yml` passes these through to the Tauri CLI as environment variables rather than declaring them as action inputs. The variable names above are what the Tauri v2 CLI reads directly; they are not listed in `action.yml` itself.
 
+A `strip-clean` job also runs on every PR. It blocks merge if any of the post-AGPL-relaunch forbidden symbols (`firebase`, `deductCredit`, `activationKey`, `ActivationScreen`) reappear in source. The intent is to keep the AGPL release clean of the prior closed-source identifiers; if you have a legitimate need to add one of these strings, raise it in the PR.
+
 ---
 
 ## 6. Code style and commit conventions
