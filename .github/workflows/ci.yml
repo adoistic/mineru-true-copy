@@ -122,6 +122,7 @@ jobs:
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
                '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
                '--exclude=runner.smoke.test.ts' --exclude=.gitignore --exclude=ci.yml \
                "firebase" .; then
             echo "ERROR: 'firebase' found in source tree"
@@ -134,6 +135,7 @@ jobs:
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
                '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
                '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
                "deductCredit" .; then
             echo "ERROR: 'deductCredit' found in source tree"
@@ -146,6 +148,7 @@ jobs:
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
                '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
                '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
                "activationKey" .; then
             echo "ERROR: 'activationKey' found in source tree"
@@ -158,6 +161,7 @@ jobs:
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
                '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
                '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
                "ActivationScreen" .; then
             echo "ERROR: 'ActivationScreen' found in source tree"

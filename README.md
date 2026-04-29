@@ -80,7 +80,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 ### Phase 2: Refactor `mineru_server.py` (deferred to v0.2)
 
-3,241 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as GitHub issue #1, `good first issue`, at v0.1 launch. The split is mechanical work that benefits from a fresh pair of eyes.
+3,247 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as GitHub issue #1, `good first issue`, at v0.1 launch. The split is mechanical work that benefits from a fresh pair of eyes.
 
 ### Phase 3: Public docs
 
@@ -118,7 +118,7 @@ These are real. Naming them is the price of asking for help.
 
 1. **Windows and Linux builds.** None yet. Apple Silicon and Intel macOS only.
 2. **Discarded block recovery for styled headers.** MinerU's `Abandon` classifier sometimes misclassifies large styled headers as discarded. A content-bounds proposal exists but is not implemented.
-3. **`mineru_server.py` is 3,241 lines.** Hard to read, harder to test. The module split is filed as issue #1.
+3. **`mineru_server.py` is 3,247 lines.** Hard to read, harder to test. The module split is filed as issue #1.
 4. **No CI yet.** Tests exist locally; the workflow is on the Phase 4 punch list.
 5. **Consumer-hardware perf on 16GB MacBook Air.** Translation works but the memory budget is tight. MPS pressure is the bottleneck.
 
