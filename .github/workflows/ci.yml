@@ -90,14 +90,15 @@ jobs:
       # cv2, ultralytics, etc. — installing that stack in CI without a pinned
       # lockfile would take 5+ minutes and routinely break on version drift.
       #
-      # The one file that runs cleanly with just pytest is test_translation.py:
-      # it mocks torch/transformers/IndicTransToolkit and tests lib/translation.py,
-      # which itself imports only the stdlib. So at v0.1 CI executes that one
-      # file. Local devs run the full suite inside `mineru-venv` per
-      # CONTRIBUTING.md. Once requirements.txt lands, replace the explicit file
-      # path below with `lib/tests/`.
-      - name: Install pytest
-        run: python -m pip install --upgrade pip pytest
+      # The one file that runs cleanly without the full MinerU stack is
+      # test_translation.py: it mocks torch/transformers/IndicTransToolkit and
+      # tests lib/translation.py, which itself imports only stdlib + bs4 (for
+      # HTML table translation). So v0.1 CI installs pytest + beautifulsoup4
+      # and runs that one file. Local devs run the full suite inside
+      # `mineru-venv` per CONTRIBUTING.md. Once requirements.txt lands, replace
+      # the explicit file path below with `lib/tests/`.
+      - name: Install pytest + bs4
+        run: python -m pip install --upgrade pip pytest beautifulsoup4
 
       - name: Pytest (mineru-independent suite)
         run: python -m pytest lib/tests/test_translation.py -v
