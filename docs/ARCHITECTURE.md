@@ -29,30 +29,32 @@ then points its WebView at the Node.js sidecar's URL.
    |  (node-server)         |   |  (mineru-server)            |
    |  Next.js standalone    |   |  Python, mineru_server.py   |
    |  port: node_port       |   |  port: mineru_port          |
-   +-----------+------------+   +--------------+--------------+
-               ^                                ^
-               |  navigate()                    |
-               |                                |
-   +-----------+------------+                   |
-   |  WebView (Tauri)       |                   |
-   |  Loads Next.js UI from |                   |
-   |  http://127.0.0.1:node_port                |
-   |  Calls Next.js API     |                   |
-   |  routes (same origin)  |                   |
-   +-----------+------------+                   |
-               |                                |
-               | HTTP (server-side fetch in Next.js)
-               +--------------------------------+
-                                                |
-                                                v
-                                  +-----------------------------+
-                                  |  Translation sidecar        |
-                                  |  (translation_server.py)    |
-                                  |  Python, IndicTrans2        |
-                                  |  port: TRANSLATION_SERVER_  |
-                                  |        URL (separate proc)  |
-                                  +-----------------------------+
+   +-----------+------------+   +-----------------------------+
+               ^                        ^
+               |  navigate()            |
+               |                        | HTTP (server-side fetch in Next.js)
+   +-----------+------------+           |
+   |  WebView (Tauri)       |           |
+   |  Loads Next.js UI from +-----------+
+   |  http://127.0.0.1:node_port        |
+   |  Calls Next.js API     |           |
+   |  routes (same origin)  |           |
+   +-----------+------------+           |
+                                        | HTTP (server-side fetch in Next.js)
+                                        v
+                          +-----------------------------+
+                          |  Translation sidecar        |
+                          |  (translation_server.py)    |
+                          |  Python, IndicTrans2        |
+                          |  port: TRANSLATION_SERVER_  |
+                          |        URL (separate proc)  |
+                          +-----------------------------+
 ```
+
+Note: the arrows from Node.js sidecar to MinerU sidecar and to Translation
+sidecar both originate at the Node.js process. The WebView never calls
+MinerU or Translation directly — all sidecar traffic is server-side fetches
+inside Next.js API routes.
 
 IPC mechanisms in use:
 
@@ -112,6 +114,9 @@ asks for it.
                                          |  - layout, OCR, formula,  |
                                          |    table, reading order   |
                                          |  - writes middle.json     |
+                                         |    (MinerU's intermediate |
+                                         |    block/bbox/reading-    |
+                                         |    order representation)  |
                                          |    + img_dir under        |
                                          |    /tmp/mineru_*          |
                                          +-------------+-------------+
@@ -156,7 +161,8 @@ Stage detail:
 2. **Submit to MinerU**: `OcrPipeline.execute()` posts the file to MinerU's
    `POST /file_parse` (handled in `mineru_server.py` at line 2860). MinerU
    spawns a worker, runs layout analysis, OCR, formula and table recognition,
-   and assembles the standard MinerU `middle.json`.
+   and assembles the standard MinerU `middle.json` (MinerU's intermediate
+   block/bbox/reading-order representation).
 3. **Poll**: the pipeline calls `GET /tasks/{id}` (line 2740 in
    `mineru_server.py`) until the task reports completion. Per-page progress
    is forwarded to the UI via the runner's `onProgress` callback.
@@ -178,9 +184,18 @@ files older than 24 hours on startup (`runner.ts` line 161).
 
 ## 3. Translation pipeline data flow
 
-Translation is presented in the v0.1 UI as "under construction", but the
-backend pipeline is wired end-to-end and works against the IndicTrans2
-sidecar. It is shipped as-is so contributors can iterate on the surface.
+The translation UI is fully shipped at v0.1. The component
+(`app/src/components/tools/TranslationTool.tsx`, 1,482 lines) supports file
+drop, multi-language selection, model variant picking, bulk folder processing,
+and live progress. The status bar shows "Translation Ready" / "Translation
+Offline" based on a health check against `/api/translation/health`. Urdu is
+the only language disabled in v0.1 (`TranslationTool.tsx:94`,
+`disabledReason: "RTL coming soon"`).
+
+The translation sidecar (`translation_server.py`) is a separate process that
+the user starts manually via `./test-venv/bin/python translation_server.py`.
+Unlike the MinerU server, it is NOT auto-spawned by Tauri at v0.1 — see
+section 1.
 
 ```
 +--------------+   text or OCR JSON   +-------------------------------+
@@ -195,9 +210,11 @@ sidecar. It is shipped as-is so contributors can iterate on the surface.
                                       |  Translation sidecar          |
                                       |  translation_server.py        |
                                       |  - IndicTrans2                |
-                                      |  - MPS on Apple Silicon,      |
-                                      |    CUDA when available, else  |
-                                      |    CPU                        |
+                                      |  - MPS (Metal Performance     |
+                                      |    Shaders, Apple's GPU       |
+                                      |    compute layer) on Apple    |
+                                      |    Silicon, CUDA when         |
+                                      |    available, else CPU        |
                                       +---------------+---------------+
                                                       |
                           translated_json             |
@@ -215,9 +232,9 @@ Behaviour notes:
 - Translation runs in its **own Python process**, separate from MinerU, to
   avoid GPU and RAM contention between OCR and translation models.
 - Endpoints exposed by `translation_server.py`: `GET /health`,
-  `POST /translate` (line 342), `POST /translate/batch` (347),
-  `GET /translate/status/{id}` (303), `GET /translate/models` (320),
-  `POST /translate/model/load` (352), `POST /translate/model/unload` (357).
+  `POST /translate` (line 341), `POST /translate/batch` (346),
+  `GET /translate/status/{id}` (302), `GET /translate/models` (319),
+  `POST /translate/model/load` (351), `POST /translate/model/unload` (356).
 
 ## 4. Key directories
 
@@ -249,7 +266,7 @@ Behaviour notes:
 | Run OCR on a PDF                 | `mineru_server.py` `POST /file_parse` (line 2860)                |
 | Poll OCR progress                | `mineru_server.py` `GET /tasks/{id}` (line 2740)                 |
 | Free OCR resources for a task    | `mineru_server.py` `DELETE /tasks/{id}` (line 2829)              |
-| Translate text or OCR JSON       | `translation_server.py` `POST /translate` (line 342)             |
+| Translate text or OCR JSON       | `translation_server.py` `POST /translate` (line 341)             |
 | Pipeline orchestration           | `app/src/lib/pipelines/runner.ts`, `queue.ts`                    |
 | Persist OpenRouter API key       | `app/src/components/settings/ApiKeysPanel.tsx` via `tauri-plugin-store` |
 
@@ -295,9 +312,10 @@ counters: one for OCR-class work and one for LLM-class work.
 
   Reserved: 4 GB for the OS, 3 GB for MinerU models at rest, ~4 GB per
   concurrent job. Under this formula a 16 GB Mac yields **2 slots** in
-  theory; in practice MPS serializes inference, so on common 16 GB hardware
-  the effective concurrency is around 1. The header comment caps the result
-  at 5 even on much larger machines.
+  theory; in practice MPS (Metal Performance Shaders, Apple's GPU compute
+  layer) serializes inference, so on common 16 GB hardware the effective
+  concurrency is around 1. The header comment caps the result at 5 even on
+  much larger machines.
 
 - **LLM slots** are fixed: `maxConcurrentLlm = 30` (`queue.ts` line 37). LLM
   work (extraction and heading correction) is API-bound, so the limit is set
@@ -315,10 +333,8 @@ Each job goes through `PipelineRunner` (`runner.ts`), which retries up to
 
 ## 8. Module split (deferred to v0.2)
 
-`mineru_server.py` is 3,247 lines today. The README's Phase 2 section files
-this as GitHub issue #1 (`good first issue`) for v0.2: the file is intended
-to split mechanically into `server.py` (HTTP layer), `cleanup.py` (the
-`/tmp/mineru_*` sweep and disk-space guard), `processing.py` (the MinerU
-invocation and per-page work), and `fonts.py` (font handling). This is
-called out here only so the next reader knows the size is acknowledged and
-already on the roadmap. No design changes are proposed in this document.
+`mineru_server.py` is 3,247 lines. Filed as GitHub issue #1
+(`good first issue`) for v0.2: split into `server.py` (HTTP layer),
+`cleanup.py` (the `/tmp/mineru_*` sweep and disk-space guard),
+`processing.py` (the MinerU invocation and per-page work), and `fonts.py`
+(font handling). No design changes are proposed in this document.
