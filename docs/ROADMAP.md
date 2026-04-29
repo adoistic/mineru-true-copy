@@ -96,6 +96,10 @@ Nothing below is committed. Each item is marked **candidate** because it is unde
 
 **Candidate.** No Windows or Linux builds exist. The `tauri-action` matrix already supports both targets. The blockers are: Python environment packaging for non-macOS, MinerU dependency testing on Linux, and no CI runner with a Windows cert for signing. See README "Known limitations" item 1 and `docs/HELP-WANTED.md`.
 
+### macOS code signing and notarization
+
+**Candidate.** v0.1 ships unsigned — first launch shows a Gatekeeper warning that users bypass with right-click → Open. The CI release job already has signing placeholders gated on `secrets.APPLE_CERTIFICATE != ''`; populating the standard tauri-action secret set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) auto-enables signing. Blocked on Apple Developer Program enrollment ($99/year) — worth it once user volume justifies the friction reduction.
+
 ---
 
 ## Future / longer-term

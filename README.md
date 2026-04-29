@@ -99,7 +99,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 - [x] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
 - [x] [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
 - [x] [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with a NOTICE-update checkbox.
-- [ ] Apple Developer signing wired into `src-tauri/tauri.conf.json` if the cert is enrolled. Otherwise document the Gatekeeper bypass in `INSTALL.md`.
+- [x] Unsigned build path. v0.1 ships without an Apple Developer cert — the CI release job's signing step is gated on `secrets.APPLE_CERTIFICATE != ''` so unsigned builds land cleanly. Code signing is a v0.2 candidate (see `docs/ROADMAP.md`); first-launch Gatekeeper bypass is documented inline in the GitHub Release notes.
 
 ### Phase 5: Demo asset
 

@@ -125,30 +125,13 @@ cargo check
 
 ---
 
-## 5. CI secrets for signed macOS builds
+## 5. CI workflow notes
 
-`ci.yml` (`.github/workflows/ci.yml`) uses `tauri-apps/tauri-action`. For signed and notarized macOS builds the runner needs these repository secrets:
+`ci.yml` (`.github/workflows/ci.yml`) uses `tauri-apps/tauri-action`. Two jobs run on every PR (`test` on macos-latest + `strip-clean` on ubuntu-latest); a third (`release`) runs on `v*` tag pushes and produces an unsigned `.dmg` in a draft GitHub Release.
 
-**Code signing**
-| Secret | Description |
-|--------|-------------|
-| `APPLE_CERTIFICATE` | Base64-encoded `.p12` certificate file |
-| `APPLE_CERTIFICATE_PASSWORD` | Password for the exported `.p12` |
-| `APPLE_SIGNING_IDENTITY` | Certificate name as it appears in Keychain (e.g. `Developer ID Application: Name (TEAMID)`) |
-| `KEYCHAIN_PASSWORD` | Ephemeral keychain password used by the CI runner |
+The `release` job ships **unsigned** by default. Users on macOS will see a Gatekeeper warning on first launch and need to right-click → Open. Code signing is out of scope for v0.1; if you fork and want signed builds, the workflow already has placeholders gated on `secrets.APPLE_CERTIFICATE != ''` — populate the standard tauri-action secret set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) and signing kicks in automatically. See https://v2.tauri.app/distribute/sign/macos/ for the canonical list.
 
-**Notarization (Apple ID method)**
-| Secret | Description |
-|--------|-------------|
-| `APPLE_ID` | Apple account email |
-| `APPLE_PASSWORD` | App-specific password for the Apple ID |
-| `APPLE_TEAM_ID` | Team ID from Apple Developer membership page |
-
-Alternatively, notarization can use the App Store Connect API key set (`APPLE_API_ISSUER`, `APPLE_API_KEY`, `APPLE_API_KEY_PATH`).
-
-Source: https://v2.tauri.app/distribute/sign/macos/ — the `tauri-action` `action.yml` passes these through to the Tauri CLI as environment variables rather than declaring them as action inputs. The variable names above are what the Tauri v2 CLI reads directly; they are not listed in `action.yml` itself.
-
-A `strip-clean` job also runs on every PR. It blocks merge if any of the post-AGPL-relaunch forbidden symbols (`firebase`, `deductCredit`, `activationKey`, `ActivationScreen`) reappear in source. The intent is to keep the AGPL release clean of the prior closed-source identifiers; if you have a legitimate need to add one of these strings, raise it in the PR.
+The `strip-clean` job blocks any PR that reintroduces post-AGPL-relaunch forbidden symbols (`firebase`, `deductCredit`, `activationKey`, `ActivationScreen`). If you have a legitimate need to add one of these strings, raise it in the PR.
 
 ---
 
