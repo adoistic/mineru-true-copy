@@ -17,9 +17,10 @@ the work before opening a PR — read the relevant files first.
 
 **Difficulty:** intermediate
 
-**The problem:** MinerU True Copy ships macOS-only (Apple Silicon and Intel `.dmg`).
-There is no Windows installer and no Linux package, which blocks the majority of
-potential users entirely.
+**The problem:** MinerU True Copy ships macOS-only at v0.1, and the `.dmg` is
+arm64-only (built on the `macos-latest` runner's host arch). There is no Intel
+build, no Windows installer, and no Linux package — which blocks the majority
+of potential users entirely.
 
 **Where to start:**
 - `.github/workflows/ci.yml` — the Windows and Linux jobs belong in this file

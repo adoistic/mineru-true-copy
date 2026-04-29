@@ -38,7 +38,7 @@ Tauri shell ── Next.js UI ──┐
                             └── HTTP ── translation_server.py  (IndicTrans2, MPS)
 ```
 
-Both Python servers run as Tauri sidecars. The renderer is a Next.js app inside Tauri's WebKit. The renderer holds the export logic because Pretext needs a canvas. A longer architecture note will land at [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) in Phase 3.
+The MinerU server is auto-spawned by Tauri as a sidecar; the translation server runs as a separate process the user starts manually (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)). The renderer is a Next.js app inside Tauri's WebKit. The renderer holds the export logic because Pretext needs a canvas.
 
 ## Quick start
 
@@ -49,7 +49,7 @@ git clone https://github.com/adoistic/mineru-true-copy.git
 cd mineru-true-copy
 ```
 
-A complete dev workflow is on the Phase 3 punch list as `CONTRIBUTING.md`. The shape is: a Python virtualenv with the MinerU dependencies, `npm install` inside `app/`, then `cargo tauri dev` from the project root.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow. In short: a Python virtualenv with the MinerU dependencies, `npm install` inside `app/`, then `npx @tauri-apps/cli dev` from the project root.
 
 To enable cloud OCR, open Settings, paste an OpenRouter key, save. The cloud option appears in the OCR mode selector.
 
@@ -87,7 +87,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 - [x] [`LICENSE`](LICENSE). Full AGPL-3.0 from gnu.org.
 - [x] [`NOTICE`](NOTICE). Third-party attribution and the AGPL forcing rationale.
 - [x] [`README.md`](README.md). This file.
-- [x] [`CONTRIBUTING.md`](CONTRIBUTING.md). Setup, dev workflow, PR submission, the secret names CI needs for signed builds.
+- [x] [`CONTRIBUTING.md`](CONTRIBUTING.md). Setup, dev workflow, PR submission, CI workflow notes.
 - [x] [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
 - [x] [`docs/ROADMAP.md`](docs/ROADMAP.md). Windows and Linux builds, broader VLM provider support, batch UI, future direction.
 - [x] [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md). The five concrete asks below, with file pointers.
@@ -115,10 +115,10 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 These are real. Naming them is the price of asking for help.
 
-1. **Windows and Linux builds.** None yet. Apple Silicon and Intel macOS only.
+1. **Windows and Linux builds.** None yet. Apple Silicon macOS only at v0.1 (the CI release job builds for the `macos-latest` runner's host arch — arm64). Intel and universal binaries are a v0.2 candidate.
 2. **Discarded block recovery for styled headers.** MinerU's `Abandon` classifier sometimes misclassifies large styled headers as discarded. A content-bounds proposal exists but is not implemented.
 3. **`mineru_server.py` is 3,247 lines.** Hard to read, harder to test. The module split is filed as issue #1.
-4. **No CI yet.** Tests exist locally; the workflow is on the Phase 4 punch list.
+4. **CI runs a thin slice of the test suite.** `pytest lib/tests/test_translation.py` is the only Python test in CI because the other 10 tests transitively import `mineru_server` and need the multi-GB MinerU dependency tree. The `requirements.txt` work that would let CI run the full suite is a `good-first-issue` (see [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md)).
 5. **Consumer-hardware perf on 16GB MacBook Air.** Translation works but the memory budget is tight. MPS pressure is the bottleneck.
 
 ## Help wanted

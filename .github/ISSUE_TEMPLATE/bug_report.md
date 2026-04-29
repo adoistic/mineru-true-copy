@@ -39,7 +39,7 @@ assignees: ''
 ## Logs
 
 Attach or paste relevant logs:
-- MinerU server log: `$TMPDIR/mineru_server.log` (run `ls $TMPDIR/mineru_server.log` in Terminal — exact path is per-user/session under `/var/folders/.../T/`)
+- MinerU server log: paste output of `cat $TMPDIR/mineru_server.log`
 - Console output if launched from terminal
 - Screenshots of any error dialogs
 

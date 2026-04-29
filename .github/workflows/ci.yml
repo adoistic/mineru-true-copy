@@ -16,7 +16,8 @@ on:
   pull_request:
   push:
     tags:
-      - 'v*'
+      # Require at least one digit after `v` so refs like `vote-fix` don't trigger.
+      - 'v[0-9]*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -130,7 +131,7 @@ jobs:
           fi
 
           echo "=== Checking: deductCredit ==="
-          if grep -rwn -w \
+          if grep -rwn \
                --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
@@ -143,7 +144,7 @@ jobs:
           fi
 
           echo "=== Checking: activationKey ==="
-          if grep -rwn -w \
+          if grep -rwn \
                --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
@@ -156,7 +157,7 @@ jobs:
           fi
 
           echo "=== Checking: ActivationScreen ==="
-          if grep -rwn -w \
+          if grep -rwn \
                --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
                --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
                --exclude-dir=docs/internal \
@@ -180,6 +181,11 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     name: Release (macOS .dmg)
     runs-on: macos-latest
+    # Override the workflow-level cancel-in-progress so a tag re-push doesn't
+    # cancel the first release build mid-upload, leaving an empty draft.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:

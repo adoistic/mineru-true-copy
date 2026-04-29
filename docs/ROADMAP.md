@@ -4,7 +4,7 @@
 
 ### Platform
 
-- macOS `.dmg` for Apple Silicon and Intel (universal binary via `tauri-action`).
+- macOS `.dmg` for Apple Silicon (built on the `macos-latest` runner via `tauri-action`). Intel/universal builds are a v0.2 candidate.
 - AGPL-3.0 license, enforced by the `lib/patch_mineru.py` runtime integration with upstream MinerU.
 
 ### OCR

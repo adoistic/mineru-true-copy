@@ -159,7 +159,7 @@ Stage detail:
    route, which calls `jobQueue.enqueue(...)` in
    `app/src/lib/pipelines/queue.ts`.
 2. **Submit to MinerU**: `OcrPipeline.execute()` posts the file to MinerU's
-   `POST /file_parse` (handled in `mineru_server.py` at line 2860). MinerU
+   `POST /file_parse` (routing dispatch at `mineru_server.py:2860`; handler `_handle_file_parse()` at line 2931). MinerU
    spawns a worker, runs layout analysis, OCR, formula and table recognition,
    and assembles the standard MinerU `middle.json` (MinerU's intermediate
    block/bbox/reading-order representation).
@@ -263,7 +263,7 @@ Behaviour notes:
 | -------------------------------- | ---------------------------------------------------------------- |
 | Launch the app                   | `src-tauri/src/main.rs` `main()` (251 lines)                     |
 | First UI rendered                | `app/src/app/page.tsx` (with `app/src/app/layout.tsx`)           |
-| Run OCR on a PDF                 | `mineru_server.py` `POST /file_parse` (line 2860)                |
+| Run OCR on a PDF                 | `mineru_server.py` `POST /file_parse` (dispatch line 2860, handler `_handle_file_parse()` line 2931) |
 | Poll OCR progress                | `mineru_server.py` `GET /tasks/{id}` (line 2740)                 |
 | Free OCR resources for a task    | `mineru_server.py` `DELETE /tasks/{id}` (line 2829)              |
 | Translate text or OCR JSON       | `translation_server.py` `POST /translate` (line 341)             |
@@ -285,7 +285,7 @@ store; each layer owns what it needs.
   extraction schemas).
 - **In-memory** — Next.js components hold UI state (current document,
   selected exports, transient progress events). Progress events are streamed
-  through the in-process emitter at `runner.ts` lines 14 to 43.
+  through the in-process emitter at `runner.ts` lines 15 to 44.
 - **Filesystem scratch** — `/tmp/mineru_*` for MinerU's per-task
   intermediate artifacts (PDF copy, page images, `pipe_result`).
   `os.tmpdir()/doctransform-uploads/` for inbound file uploads; the runner
@@ -296,7 +296,7 @@ store; each layer owns what it needs.
 
 On startup the queue calls `resetStuckJobs()` to flip any job left in
 `processing` (from a hard shutdown) back to `queued` so it gets re-run
-(`queue.ts` lines 117 to 128).
+(IIFE in `queue.ts` lines 118 to 129).
 
 ## 7. Concurrency model
 
@@ -324,7 +324,7 @@ counters: one for OCR-class work and one for LLM-class work.
 `isOcrType(jobType)` routes `ocr` and `heading_correction` jobs through the
 OCR counter; everything else goes through the LLM counter (`queue.ts` lines
 61 to 70). The queue is sorted ascending by page count so small documents
-do not get starved behind large ones (`queue.ts` lines 47 to 53).
+do not get starved behind large ones (`queue.ts` lines 47 to 54).
 
 Each job goes through `PipelineRunner` (`runner.ts`), which retries up to
 `MAX_RETRIES = 2` times on classified-retryable errors (`mineru_crash`,
