@@ -1,0 +1,41 @@
+# MinerU True Copy v0.1 — Python dependency manifest
+#
+# Curated top-level deps for the mineru-venv. Pip resolves transitive
+# deps from these. Generated initially by `pip freeze` from a working
+# test-venv on macOS Apple Silicon, then trimmed to direct project deps.
+#
+# OCR / document layout (MinerU)
+magic-pdf==1.3.12
+PyMuPDF==1.24.14
+
+# Vision LLM OCR (cloud mode)
+huggingface_hub==0.36.2
+
+# Translation (IndicTrans2 — pinned commit for reproducibility)
+indictranstoolkit @ git+https://github.com/VarunGumma/IndicTransToolkit.git@3efb8418d0721b4ce267c2b3586899d313191357
+indic-nlp-library-itt==0.1.1
+
+# Deep learning runtime (let pip pull these in via magic-pdf, but pinning
+# the major versions to stop sub-dep churn from breaking warm-up)
+torch==2.11.0
+torchvision==0.26.0
+transformers==4.57.6
+
+# Layout / table / formula heads
+ultralytics==8.4.33
+doclayout_yolo==0.0.2b1
+onnxruntime==1.24.4
+
+# OCR engine (PaddleOCR)
+opencv-python-headless==4.13.0.92
+
+# Server
+beautifulsoup4==4.14.3
+loguru==0.7.3
+requests==2.32.5
+
+# Build (only needed for scripts/build-app.sh; setup.sh skips it by default)
+pyinstaller==6.19.0
+
+# Test
+pytest>=7.0
