@@ -8,9 +8,8 @@ the work before opening a PR — read the relevant files first.
 1. [Windows and Linux builds](#1-windows-and-linux-builds)
 2. [Discarded block recovery for styled headers](#2-discarded-block-recovery-for-styled-headers)
 3. [`mineru_server.py` module split](#3-mineru_serverpy-module-split)
-4. [Document the Python dependency manifest](#4-document-the-python-dependency-manifest)
-5. [Memory budget on 16 GB MacBook Air](#5-memory-budget-on-16-gb-macbook-air)
-6. [Fix pre-existing lint errors so CI lint can be tightened](#6-fix-pre-existing-lint-errors-so-ci-lint-can-be-tightened)
+4. [Memory budget on 16 GB MacBook Air](#4-memory-budget-on-16-gb-macbook-air)
+5. [Fix pre-existing lint errors so CI lint can be tightened](#5-fix-pre-existing-lint-errors-so-ci-lint-can-be-tightened)
 
 ---
 
@@ -111,38 +110,7 @@ mechanical split stays reviewable.
 
 ---
 
-### 4. Document the Python dependency manifest
-
-**Difficulty:** good-first-issue
-
-**The problem:** There is no `requirements.txt` at v0.1. Python dependencies are
-implied by `scripts/bundle-mineru.spec` (the PyInstaller hidden-imports list),
-the imports at the top of `mineru_server.py`, and institutional memory. A new
-contributor cannot recreate a working `mineru-venv/` from scratch without reading
-three files and guessing version constraints.
-
-**Where to start:**
-- `scripts/bundle-mineru.spec` — the canonical list of packages that must be
-  present in the bundle (lines 22–46 enumerate the `collect_submodules` calls).
-- `mineru_server.py` — top-level imports; cross-reference against the spec.
-- `lib/translation.py` and `translation_server.py` — translation sidecar deps
-  (IndicTrans2, psutil, torch) are a separate surface from the MinerU deps.
-- `CONTRIBUTING.md` — add a "Setting up the Python environment" section.
-
-**Acceptance criteria:**
-- A `requirements.txt` at repo root (or `pyproject.toml` with optional-deps) that
-  recreates a working `mineru-venv/` from scratch on a clean macOS install.
-- The contributor has actually tested venv recreation: `python -m venv test-venv2 &&
-  test-venv2/bin/pip install -r requirements.txt` then run the existing test suite.
-- `CONTRIBUTING.md` is updated to reference the new file with setup instructions.
-
-**Discuss first if:** you find version conflicts between MinerU's pinned deps and
-the IndicTrans2 deps — propose a split (`requirements-mineru.txt` /
-`requirements-translation.txt`) before opening the PR.
-
----
-
-### 5. Memory budget on 16 GB MacBook Air
+### 4. Memory budget on 16 GB MacBook Air
 
 **Difficulty:** intermediate
 
@@ -183,7 +151,7 @@ PyTorch versions; confirm your approach on both 2.x and 2.5+ first.
 
 ---
 
-## 6. Fix pre-existing lint errors so CI lint can be tightened
+## 5. Fix pre-existing lint errors so CI lint can be tightened
 
 **Difficulty:** good-first-issue
 

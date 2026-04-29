@@ -19,6 +19,11 @@ PDF/
 test-venv/
 test-outputs/
 scripts/.cache/
+
+# Setup script artifacts (created by scripts/setup.sh + scripts/run.sh)
+setup.log
+.setup-*.log
+.run-*.log
 src-tauri/binaries/
 src-tauri/resources/node-standalone/
 src-tauri/resources/node-runtime/

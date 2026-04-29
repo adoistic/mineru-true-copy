@@ -1,23 +1,21 @@
 # MinerU True Copy — CI workflow
 #
-# Two jobs:
-#   1. test (pull_request)  — lint, vitest, cargo check, pytest on macos-latest
-#   2. release (push tag v*) — tauri-action builds the macOS .dmg and attaches
-#      it to the GitHub Release. macOS code-signing/notarization runs only when
-#      the Apple secrets are present (forks build unsigned successfully).
+# Three jobs:
+#   1. test         (pull_request) — lint, vitest, cargo check, pytest on macos-latest
+#   2. strip-clean  (pull_request) — guards against re-introducing post-AGPL-strip symbols
+#   3. setup-preflight (pull_request) — runs scripts/setup.sh --preflight-only to
+#      catch regressions in the developer-setup flow without downloading 3.4 GB
+#      of models.
 #
-# Required secrets for signed releases (all optional; gated on APPLE_CERTIFICATE):
-#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
-#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD
+# v0.1 ships as a developer setup (scripts/setup.sh), not a .dmg. There is
+# intentionally no release / build / publish job. The v0.1.0 git tag is a
+# source marker; the GitHub Release page links to setup instructions.
+# Re-introducing a packaging job is a v0.2 distribution-architecture decision.
 
 name: CI
 
 on:
   pull_request:
-  push:
-    tags:
-      # Require at least one digit after `v` so refs like `vote-fix` don't trigger.
-      - 'v[0-9]*'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -83,20 +81,12 @@ jobs:
         run: cargo check
 
       # Pytest dependency situation at v0.1:
-      # There is intentionally NO requirements.txt yet — locking down the
-      # MinerU/torch/cv2/ultralytics dependency surface is a HELP-WANTED ask
-      # for v0.2 (see docs/HELP-WANTED.md). 10 of the 11 files under lib/tests/
-      # transitively import mineru_server, which pulls in magic_pdf, torch,
-      # cv2, ultralytics, etc. — installing that stack in CI without a pinned
-      # lockfile would take 5+ minutes and routinely break on version drift.
-      #
-      # The one file that runs cleanly without the full MinerU stack is
-      # test_translation.py: it mocks torch/transformers/IndicTransToolkit and
-      # tests lib/translation.py, which itself imports only stdlib + bs4 (for
-      # HTML table translation). So v0.1 CI installs pytest + beautifulsoup4
-      # and runs that one file. Local devs run the full suite inside
-      # `mineru-venv` per CONTRIBUTING.md. Once requirements.txt lands, replace
-      # the explicit file path below with `lib/tests/`.
+      # The full requirements.txt provisions ~3 GB of torch/transformers
+      # weight downloads + native compiles, which is too slow for every PR
+      # (5-10 min on a clean cache). CI installs only pytest + bs4 and runs
+      # the one file that mocks the heavy deps (test_translation.py).
+      # The full suite runs locally via `mineru-venv` per CONTRIBUTING.md;
+      # nightly/tag CI can run scripts/setup.sh --full-verify when added.
       - name: Install pytest + bs4
         run: python -m pip install --upgrade pip pytest beautifulsoup4
 
@@ -183,17 +173,10 @@ jobs:
 
           echo "PASSED: No forbidden symbols found."
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    name: Release (macOS .dmg)
+  setup-preflight:
+    if: github.event_name == 'pull_request'
+    name: Setup preflight (scripts/setup.sh --preflight-only)
     runs-on: macos-latest
-    # Override the workflow-level cancel-in-progress so a tag re-push doesn't
-    # cancel the first release build mid-upload, leaving an empty draft.
-    concurrency:
-      group: release-${{ github.ref }}
-      cancel-in-progress: false
-    permissions:
-      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -202,31 +185,21 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: 'npm'
-          cache-dependency-path: app/package-lock.json
 
       - name: Set up Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
         with:
-          workspaces: src-tauri
+          python-version: '3.12'
 
-      - name: Install npm deps
-        working-directory: app
-        run: npm ci
+      - name: Install brew preflight deps
+        run: |
+          # macos-latest already has pkg-config / openssl / cmake; install if absent
+          for pkg in pkg-config openssl cmake; do
+            brew list --formula "$pkg" >/dev/null 2>&1 || brew install "$pkg"
+          done
 
-      - name: Build + release
-        uses: tauri-apps/tauri-action@v0.6.2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: 'MinerU True Copy ${{ github.ref_name }}'
-          releaseDraft: true
-          prerelease: false
-          projectPath: src-tauri
-          # Builds for the runner's host arch (arm64 on macos-latest). Universal
-          # builds (--target universal-apple-darwin) are a v0.2 enhancement —
-          # they need both rustup targets installed and add ~2x to bundle size.
+      - name: Run setup.sh --preflight-only
+        run: bash scripts/setup.sh --preflight-only
