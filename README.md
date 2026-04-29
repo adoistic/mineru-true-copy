@@ -87,18 +87,18 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 - [x] [`LICENSE`](LICENSE). Full AGPL-3.0 from gnu.org.
 - [x] [`NOTICE`](NOTICE). Third-party attribution and the AGPL forcing rationale.
 - [x] [`README.md`](README.md). This file.
-- [ ] `CONTRIBUTING.md`. Setup, dev workflow, PR submission, the secret names CI needs for signed builds.
-- [ ] `docs/ARCHITECTURE.md`. Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
-- [ ] `docs/ROADMAP.md`. Windows and Linux builds, broader VLM provider support, batch UI, future direction.
-- [ ] `docs/HELP-WANTED.md`. The five concrete asks below, with file pointers.
+- [x] [`CONTRIBUTING.md`](CONTRIBUTING.md). Setup, dev workflow, PR submission, the secret names CI needs for signed builds.
+- [x] [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
+- [x] [`docs/ROADMAP.md`](docs/ROADMAP.md). Windows and Linux builds, broader VLM provider support, batch UI, future direction.
+- [x] [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md). The five concrete asks below, with file pointers.
 - [x] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
 
 ### Phase 4: Ship infrastructure
 
-- [ ] `.github/workflows/ci.yml` using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg`, signs and notarizes if cert secrets are present, attaches the artifact to the GitHub Release.
-- [ ] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
-- [ ] `.github/ISSUE_TEMPLATE/` with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
-- [ ] `.github/PULL_REQUEST_TEMPLATE.md` with a NOTICE-update checkbox.
+- [x] [`.github/workflows/ci.yml`](.github/workflows/ci.yml) using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg`, signs and notarizes if cert secrets are present, attaches the artifact to the GitHub Release.
+- [x] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
+- [x] [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
+- [x] [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with a NOTICE-update checkbox.
 - [ ] Apple Developer signing wired into `src-tauri/tauri.conf.json` if the cert is enrolled. Otherwise document the Gatekeeper bypass in `INSTALL.md`.
 
 ### Phase 5: Demo asset
