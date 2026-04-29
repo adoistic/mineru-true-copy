@@ -42,16 +42,20 @@ The MinerU server is auto-spawned by Tauri as a sidecar; the translation server 
 
 ## Quick start
 
-A `.dmg` will land with the v0.1.0 tag. Until then, build from source on Apple Silicon:
+**v0.1 is a developer preview.** No `.dmg` installer; the install path is a setup script that provisions everything on a fresh macOS Apple Silicon machine in about 15 minutes (assuming Node 22, Python 3.12, Rust, and Xcode CLT are already installed; otherwise add ~30-45 min for those).
 
 ```bash
 git clone https://github.com/adoistic/mineru-true-copy.git
 cd mineru-true-copy
+./scripts/setup.sh
+./scripts/run.sh
 ```
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow. In short: a Python virtualenv with the MinerU dependencies, `npm install` inside `app/`, then `npx @tauri-apps/cli dev` from the project root.
+`setup.sh` runs six phases (preflight → Python venv → Node deps → ~3.4 GB model download → sidecar verification). It is idempotent — re-run it if anything fails partway and it resumes from where it left off. Logs go to `setup.log` (gitignored). See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow including the four-terminal manual variant.
 
-To enable cloud OCR, open Settings, paste an OpenRouter key, save. The cloud option appears in the OCR mode selector.
+To enable cloud OCR, open Settings in the running app, paste an OpenRouter key, save. The cloud option appears in the OCR mode selector. Local OCR works without any API key.
+
+Why developer preview and not a downloadable installer at v0.1: a working `.dmg` would be 5-7 GB (MinerU PyInstaller + ML models + Node sidecar) — over GitHub Releases' 2 GB single-asset limit. v0.2 will tackle distribution architecture properly. See [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Built on the shoulders of
 
