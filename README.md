@@ -91,7 +91,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 - [ ] `docs/ARCHITECTURE.md`. Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
 - [ ] `docs/ROADMAP.md`. Windows and Linux builds, broader VLM provider support, batch UI, future direction.
 - [ ] `docs/HELP-WANTED.md`. The five concrete asks below, with file pointers.
-- [ ] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
+- [x] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
 
 ### Phase 4: Ship infrastructure
 
