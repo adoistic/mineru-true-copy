@@ -96,6 +96,82 @@ jobs:
       - name: Pytest (mineru-independent suite)
         run: python -m pytest lib/tests/test_translation.py -v
 
+  strip-clean:
+    if: github.event_name == 'pull_request'
+    name: Strip-clean guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for forbidden symbols
+        # Fails if any PR reintroduces tokens stripped during the AGPL relaunch.
+        # Excluded from the scan:
+        #   README.md / CHANGELOG.md  — historical narrative mentions the strip
+        #   runner.smoke.test.ts      — contains the tokens as string literals in
+        #                               the existing unit-level anti-regression test
+        #   .gitignore                — lists firebase credential filenames (not code)
+        #   ci.yml                    — this file uses the tokens as grep patterns
+        #   Standard noise dirs/files: node_modules, lock files, dist, etc.
+        run: |
+          FOUND=0
+
+          echo "=== Checking: firebase (case-insensitive) ==="
+          if grep -rwni -w \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               '--exclude=runner.smoke.test.ts' --exclude=.gitignore --exclude=ci.yml \
+               "firebase" .; then
+            echo "ERROR: 'firebase' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: deductCredit ==="
+          if grep -rwn -w \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "deductCredit" .; then
+            echo "ERROR: 'deductCredit' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: activationKey ==="
+          if grep -rwn -w \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "activationKey" .; then
+            echo "ERROR: 'activationKey' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: ActivationScreen ==="
+          if grep -rwn -w \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "ActivationScreen" .; then
+            echo "ERROR: 'ActivationScreen' found in source tree"
+            FOUND=1
+          fi
+
+          if [ "$FOUND" -eq 1 ]; then
+            echo ""
+            echo "FAILED: Forbidden symbols detected. Remove them before merging."
+            exit 1
+          fi
+
+          echo "PASSED: No forbidden symbols found."
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     name: Release (macOS .dmg)
