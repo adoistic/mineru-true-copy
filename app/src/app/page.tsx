@@ -145,7 +145,7 @@ export default function Home() {
             DT
           </div>
           <span className="text-[13px] font-semibold" style={{ color: 'var(--text-primary)' }}>
-            DocTransform
+            MinerU True Copy
           </span>
         </div>
 

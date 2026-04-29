@@ -633,7 +633,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "doctransform"
+name = "mineru-true-copy"
 version = "0.1.0"
 dependencies = [
  "dirs",

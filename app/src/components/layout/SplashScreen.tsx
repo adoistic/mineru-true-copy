@@ -135,7 +135,7 @@ export default function SplashScreen({ onReady }: SplashScreenProps) {
             DT
           </div>
           <div className="text-[16px] font-semibold" style={{ color: "var(--text-primary)" }}>
-            DocTransform
+            MinerU True Copy
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# Full build orchestrator for DocTransform .dmg
+# Full build orchestrator for MinerU True Copy .dmg
 #
 # Builds everything in order:
 #   1. Next.js standalone + Node.js sidecar
@@ -23,7 +23,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TAURI_DIR="$PROJECT_DIR/src-tauri"
 
 echo "=========================================="
-echo "  DocTransform Build"
+echo "  MinerU True Copy Build"
 echo "=========================================="
 echo ""
 

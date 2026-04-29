@@ -22,7 +22,7 @@ export async function createEpub(
 
     const options = {
       title,
-      author: 'DocTransform',
+      author: 'MinerU True Copy',
     };
 
     const epubBuffer = await EPub(options, chapters);

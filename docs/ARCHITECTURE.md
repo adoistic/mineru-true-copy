@@ -179,7 +179,7 @@ Stage detail:
    PDF bytes, and `img_dir`.
 
 The MinerU intermediate artifacts live under `/tmp/mineru_*` for the
-duration of a task. The runner sweeps stale `doctransform-uploads/` temp
+duration of a task. The runner sweeps stale `mineru-true-copy-uploads/` temp
 files older than 24 hours on startup (`runner.ts` line 161).
 
 ## 3. Translation pipeline data flow
@@ -279,7 +279,7 @@ store; each layer owns what it needs.
   and theme preferences live here. The store is granted to the app via
   `src-tauri/capabilities/default.json` (`store:default`).
 - **Job queue and history** — SQLite, via `app/src/lib/db/sqlite.ts`. The
-  database lives at `~/.doctransform/doctransform.db` with WAL journal mode.
+  database lives at `~/.mineru-true-copy/mineru-true-copy.db` with WAL journal mode.
   Two tables: `jobs` (one row per OCR/extraction/translation job, including
   status, retry count, output file paths) and `schema_templates` (saved
   extraction schemas).
@@ -288,7 +288,7 @@ store; each layer owns what it needs.
   through the in-process emitter at `runner.ts` lines 15 to 44.
 - **Filesystem scratch** — `/tmp/mineru_*` for MinerU's per-task
   intermediate artifacts (PDF copy, page images, `pipe_result`).
-  `os.tmpdir()/doctransform-uploads/` for inbound file uploads; the runner
+  `os.tmpdir()/mineru-true-copy-uploads/` for inbound file uploads; the runner
   sweeps anything older than 24 hours on startup
   (`runner.ts` `cleanupOldTempFiles()`).
 - **Output folder** — chosen by the user per job. Exports land under

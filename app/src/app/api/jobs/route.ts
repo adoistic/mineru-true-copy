@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     const jobType = config.job_type || 'ocr';
 
     // Save uploaded file to temp dir
-    const tmpDir = path.join(os.tmpdir(), 'doctransform-uploads');
+    const tmpDir = path.join(os.tmpdir(), 'mineru-true-copy-uploads');
     fs.mkdirSync(tmpDir, { recursive: true });
     const uniqueId = crypto.randomUUID().slice(0, 8);
     const filePath = path.join(tmpDir, `${uniqueId}_${file.name}`);
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
     }
 
     // Ensure output folder exists
-    const outputFolder = config.output_folder || path.join(os.homedir(), 'DocTransform-Output');
+    const outputFolder = config.output_folder || path.join(os.homedir(), 'MinerU True Copy Output');
     fs.mkdirSync(outputFolder, { recursive: true });
 
     // Select pipeline

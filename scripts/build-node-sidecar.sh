@@ -98,7 +98,7 @@ mkdir -p "$TAURI_DIR/binaries"
 
 cat > "$TAURI_DIR/binaries/node-server-aarch64-apple-darwin" << 'WRAPPER'
 #!/bin/bash
-# Node.js sidecar wrapper for DocTransform
+# Node.js sidecar wrapper for MinerU True Copy
 # Usage: node-server <port> <mineru_url>
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT="${1:-3000}"
