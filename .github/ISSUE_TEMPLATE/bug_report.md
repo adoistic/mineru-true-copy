@@ -39,7 +39,7 @@ assignees: ''
 ## Logs
 
 Attach or paste relevant logs:
-- MinerU server log: `~/Library/Application Support/com.doctransform.app/logs/mineru.log` (or wherever the app writes them — see status bar)
+- MinerU server log: `$TMPDIR/mineru_server.log` (run `ls $TMPDIR/mineru_server.log` in Terminal — exact path is per-user/session under `/var/folders/.../T/`)
 - Console output if launched from terminal
 - Screenshots of any error dialogs
 
