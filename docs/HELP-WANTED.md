@@ -10,6 +10,7 @@ the work before opening a PR — read the relevant files first.
 3. [`mineru_server.py` module split](#3-mineru_serverpy-module-split)
 4. [Document the Python dependency manifest](#4-document-the-python-dependency-manifest)
 5. [Memory budget on 16 GB MacBook Air](#5-memory-budget-on-16-gb-macbook-air)
+6. [Fix pre-existing lint errors so CI lint can be tightened](#6-fix-pre-existing-lint-errors-so-ci-lint-can-be-tightened)
 
 ---
 
@@ -179,3 +180,41 @@ All existing tests in `lib/tests/test_translation.py` must still pass.
 **Discuss first if:** you want to tackle MPS memory probing — the
 `torch.mps` memory API is under-documented and behavior varies across
 PyTorch versions; confirm your approach on both 2.x and 2.5+ first.
+
+---
+
+## 6. Fix pre-existing lint errors so CI lint can be tightened
+
+**Difficulty:** good-first-issue
+
+**The problem:** The CI lint step is set to `continue-on-error: true` at v0.1
+because the codebase has 9 pre-existing lint errors that accumulated before
+CI enforcement existed. Lint output is visible on every PR, but it does not
+gate merges. Once the errors are fixed, the `continue-on-error` line in
+`.github/workflows/ci.yml` can be removed and lint becomes a real gate.
+
+**Where to start:** these are the 9 errors as of v0.1 (run `cd app && npm run lint`
+to confirm the current list):
+
+| File | Line | Rule | Fix shape |
+|---|---|---|---|
+| `app/src/components/processing/JobProgress.tsx` | 29 | `react-hooks/refs` (ref-during-render) | Move `callbacksRef.current = …` into a `useEffect` |
+| `app/src/components/tools/TranslationTool.tsx` | 845 | `react/no-unescaped-entities` | Replace `'` with `&apos;` |
+| `app/src/lib/env.ts` | 5, 8 | `@typescript-eslint/no-require-imports` | Convert `require('dotenv')` to `import` |
+| `app/src/lib/export/__tests__/font-resolver.test.ts` | 162 | `@typescript-eslint/no-explicit-any` | Replace `as any` with the actual `Script` type, or add a per-line `eslint-disable-next-line` with rationale (this is a test exercising an out-of-domain script) |
+| `app/src/lib/export/searchable-pdf.ts` | 1 | `@typescript-eslint/ban-ts-comment` | The `@ts-nocheck` is justified (`pdf-lib` internal APIs); replace with `@ts-expect-error` per-line or add a per-rule `eslint-disable` with rationale |
+| `app/src/lib/export/true-copy-docx.ts` | 235 | `prefer-const` | `let eqH` → `const eqH` |
+| `app/src/lib/export/true-copy-pdf.ts` | 425 | `prefer-const` | `let fontSize` → `const fontSize` |
+| `app/src/lib/pipelines/extraction.ts` | 147 | `@typescript-eslint/no-require-imports` | Hoist `require('os')` to a top-level `import os from 'os'` |
+
+**Acceptance criteria:**
+- `cd app && npm run lint` returns exit code 0 with zero errors. Warnings are out of scope for this ask.
+- Remove the `continue-on-error: true` line from the lint step in
+  `.github/workflows/ci.yml` (around line 70). Add a one-line note in the
+  PR description that lint is now a hard gate.
+- All existing `vitest`, `pytest`, and `cargo check` jobs still pass.
+
+**Discuss first if:** removing `@ts-nocheck` from `searchable-pdf.ts` surfaces
+cascading TypeScript errors. The file uses `pdf-lib` internal APIs without
+public typings; the right move may be a per-line `@ts-expect-error` rather
+than deleting the directive entirely.
