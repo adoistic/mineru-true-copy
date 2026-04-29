@@ -1,0 +1,242 @@
+# MinerU True Copy — CI workflow
+#
+# Two jobs:
+#   1. test (pull_request)  — lint, vitest, cargo check, pytest on macos-latest
+#   2. release (push tag v*) — tauri-action builds the macOS .dmg and attaches
+#      it to the GitHub Release. macOS code-signing/notarization runs only when
+#      the Apple secrets are present (forks build unsigned successfully).
+#
+# Required secrets for signed releases (all optional; gated on APPLE_CERTIFICATE):
+#   APPLE_CERTIFICATE, APPLE_CERTIFICATE_PASSWORD, APPLE_SIGNING_IDENTITY,
+#   APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID, KEYCHAIN_PASSWORD
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    tags:
+      # Require at least one digit after `v` so refs like `vote-fix` don't trigger.
+      - 'v[0-9]*'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # v0.1 ships macOS only. Windows + Linux are HELP-WANTED for v0.2.
+        os: [macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # macos-latest runners ship with Xcode CLT, which is all Tauri v2 needs
+      # for `cargo check`. No extra system packages required.
+
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      - name: Lint (eslint)
+        # v0.1: warn-only. The codebase has 9 pre-existing lint errors that
+        # accumulated before CI enforcement existed (see docs/HELP-WANTED.md).
+        # Lint output remains visible on every PR; flip continue-on-error off
+        # once the cleanup ask lands.
+        working-directory: app
+        run: npm run lint
+        continue-on-error: true
+
+      - name: Vitest
+        working-directory: app
+        run: npx vitest run
+
+      - name: Cargo check
+        working-directory: src-tauri
+        run: cargo check
+
+      # Pytest dependency situation at v0.1:
+      # There is intentionally NO requirements.txt yet — locking down the
+      # MinerU/torch/cv2/ultralytics dependency surface is a HELP-WANTED ask
+      # for v0.2 (see docs/HELP-WANTED.md). 10 of the 11 files under lib/tests/
+      # transitively import mineru_server, which pulls in magic_pdf, torch,
+      # cv2, ultralytics, etc. — installing that stack in CI without a pinned
+      # lockfile would take 5+ minutes and routinely break on version drift.
+      #
+      # The one file that runs cleanly without the full MinerU stack is
+      # test_translation.py: it mocks torch/transformers/IndicTransToolkit and
+      # tests lib/translation.py, which itself imports only stdlib + bs4 (for
+      # HTML table translation). So v0.1 CI installs pytest + beautifulsoup4
+      # and runs that one file. Local devs run the full suite inside
+      # `mineru-venv` per CONTRIBUTING.md. Once requirements.txt lands, replace
+      # the explicit file path below with `lib/tests/`.
+      - name: Install pytest + bs4
+        run: python -m pip install --upgrade pip pytest beautifulsoup4
+
+      - name: Pytest (mineru-independent suite)
+        run: python -m pytest lib/tests/test_translation.py -v
+
+  strip-clean:
+    if: github.event_name == 'pull_request'
+    name: Strip-clean guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for forbidden symbols
+        # Fails if any PR reintroduces tokens stripped during the AGPL relaunch.
+        # Excluded from the scan:
+        #   README.md / CHANGELOG.md  — historical narrative mentions the strip
+        #   runner.smoke.test.ts      — contains the tokens as string literals in
+        #                               the existing unit-level anti-regression test
+        #   .gitignore                — lists firebase credential filenames (not code)
+        #   ci.yml                    — this file uses the tokens as grep patterns
+        #   Standard noise dirs/files: node_modules, lock files, dist, etc.
+        run: |
+          FOUND=0
+
+          echo "=== Checking: firebase (case-insensitive) ==="
+          if grep -rwni \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
+               '--exclude=runner.smoke.test.ts' --exclude=.gitignore --exclude=ci.yml \
+               "firebase" .; then
+            echo "ERROR: 'firebase' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: deductCredit ==="
+          if grep -rwn \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "deductCredit" .; then
+            echo "ERROR: 'deductCredit' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: activationKey ==="
+          if grep -rwn \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "activationKey" .; then
+            echo "ERROR: 'activationKey' found in source tree"
+            FOUND=1
+          fi
+
+          echo "=== Checking: ActivationScreen ==="
+          if grep -rwn \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "ActivationScreen" .; then
+            echo "ERROR: 'ActivationScreen' found in source tree"
+            FOUND=1
+          fi
+
+          if [ "$FOUND" -eq 1 ]; then
+            echo ""
+            echo "FAILED: Forbidden symbols detected. Remove them before merging."
+            exit 1
+          fi
+
+          echo "PASSED: No forbidden symbols found."
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    name: Release (macOS .dmg)
+    runs-on: macos-latest
+    # Override the workflow-level cancel-in-progress so a tag re-push doesn't
+    # cancel the first release build mid-upload, leaving an empty draft.
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: app/package-lock.json
+
+      - name: Set up Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install npm deps
+        working-directory: app
+        run: npm ci
+
+      - name: Build + release
+        uses: tauri-apps/tauri-action@v0.6.2
+        env:
+          # Apple signing/notarization secrets — optional. If unset (e.g. on a
+          # fork without the cert configured), tauri-action skips signing and
+          # produces an unsigned .dmg. The build still succeeds.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_TEAM_ID || '' }}
+          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.KEYCHAIN_PASSWORD || '' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'MinerU True Copy ${{ github.ref_name }}'
+          releaseDraft: true
+          prerelease: false
+          projectPath: src-tauri
+          # Builds for the runner's host arch (arm64 on macos-latest). Universal
+          # builds (--target universal-apple-darwin) are a v0.2 enhancement —
+          # they need both rustup targets installed and add ~2x to bundle size.

@@ -16,7 +16,7 @@ IndicTrans2 ships in the same Tauri bundle. MPS batching is tuned for 16GB Apple
 
 ## Status
 
-`v0.1.0` is in flight. The strip and scrub passes have landed on `main`. License, NOTICE, and proprietary code removal are done. The build runs locally on Apple Silicon today. A signed `.dmg` is on the Phase 4 punch list.
+`v0.1.0` is in flight. The strip and scrub passes have landed on `main`. License, NOTICE, and proprietary code removal are done. The build runs locally on Apple Silicon today. A `.dmg` will land with the v0.1.0 tag.
 
 The full development plan is below. It is honest about what is broken so contributors can show up.
 
@@ -38,18 +38,18 @@ Tauri shell ── Next.js UI ──┐
                             └── HTTP ── translation_server.py  (IndicTrans2, MPS)
 ```
 
-Both Python servers run as Tauri sidecars. The renderer is a Next.js app inside Tauri's WebKit. The renderer holds the export logic because Pretext needs a canvas. A longer architecture note will land at [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) in Phase 3.
+The MinerU server is auto-spawned by Tauri as a sidecar; the translation server runs as a separate process the user starts manually (see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)). The renderer is a Next.js app inside Tauri's WebKit. The renderer holds the export logic because Pretext needs a canvas.
 
 ## Quick start
 
-A signed `.dmg` will land with v0.1.0. Until then, build from source on Apple Silicon:
+A `.dmg` will land with the v0.1.0 tag. Until then, build from source on Apple Silicon:
 
 ```bash
 git clone https://github.com/adoistic/mineru-true-copy.git
 cd mineru-true-copy
 ```
 
-A complete dev workflow is on the Phase 3 punch list as `CONTRIBUTING.md`. The shape is: a Python virtualenv with the MinerU dependencies, `npm install` inside `app/`, then `cargo tauri dev` from the project root.
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow. In short: a Python virtualenv with the MinerU dependencies, `npm install` inside `app/`, then `npx @tauri-apps/cli dev` from the project root.
 
 To enable cloud OCR, open Settings, paste an OpenRouter key, save. The cloud option appears in the OCR mode selector.
 
@@ -80,26 +80,25 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 ### Phase 2: Refactor `mineru_server.py` (deferred to v0.2)
 
-3,241 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as GitHub issue #1, `good first issue`, at v0.1 launch. The split is mechanical work that benefits from a fresh pair of eyes.
+3,247 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as GitHub issue #1, `good first issue`, at v0.1 launch. The split is mechanical work that benefits from a fresh pair of eyes.
 
 ### Phase 3: Public docs
 
 - [x] [`LICENSE`](LICENSE). Full AGPL-3.0 from gnu.org.
 - [x] [`NOTICE`](NOTICE). Third-party attribution and the AGPL forcing rationale.
 - [x] [`README.md`](README.md). This file.
-- [ ] `CONTRIBUTING.md`. Setup, dev workflow, PR submission, the secret names CI needs for signed builds.
-- [ ] `docs/ARCHITECTURE.md`. Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
-- [ ] `docs/ROADMAP.md`. Windows and Linux builds, broader VLM provider support, batch UI, future direction.
-- [ ] `docs/HELP-WANTED.md`. The five concrete asks below, with file pointers.
-- [ ] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
+- [x] [`CONTRIBUTING.md`](CONTRIBUTING.md). Setup, dev workflow, PR submission, CI workflow notes.
+- [x] [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
+- [x] [`docs/ROADMAP.md`](docs/ROADMAP.md). Windows and Linux builds, broader VLM provider support, batch UI, future direction.
+- [x] [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md). The five concrete asks below, with file pointers.
+- [x] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
 
 ### Phase 4: Ship infrastructure
 
-- [ ] `.github/workflows/ci.yml` using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg`, signs and notarizes if cert secrets are present, attaches the artifact to the GitHub Release.
-- [ ] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
-- [ ] `.github/ISSUE_TEMPLATE/` with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
-- [ ] `.github/PULL_REQUEST_TEMPLATE.md` with a NOTICE-update checkbox.
-- [ ] Apple Developer signing wired into `src-tauri/tauri.conf.json` if the cert is enrolled. Otherwise document the Gatekeeper bypass in `INSTALL.md`.
+- [x] [`.github/workflows/ci.yml`](.github/workflows/ci.yml) using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg` and attaches the artifact to the GitHub Release.
+- [x] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
+- [x] [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
+- [x] [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with a NOTICE-update checkbox.
 
 ### Phase 5: Demo asset
 
@@ -116,10 +115,10 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 These are real. Naming them is the price of asking for help.
 
-1. **Windows and Linux builds.** None yet. Apple Silicon and Intel macOS only.
+1. **Windows and Linux builds.** None yet. Apple Silicon macOS only at v0.1 (the CI release job builds for the `macos-latest` runner's host arch — arm64). Intel and universal binaries are a v0.2 candidate.
 2. **Discarded block recovery for styled headers.** MinerU's `Abandon` classifier sometimes misclassifies large styled headers as discarded. A content-bounds proposal exists but is not implemented.
-3. **`mineru_server.py` is 3,241 lines.** Hard to read, harder to test. The module split is filed as issue #1.
-4. **No CI yet.** Tests exist locally; the workflow is on the Phase 4 punch list.
+3. **`mineru_server.py` is 3,247 lines.** Hard to read, harder to test. The module split is filed as issue #1.
+4. **CI runs a thin slice of the test suite.** `pytest lib/tests/test_translation.py` is the only Python test in CI because the other 10 tests transitively import `mineru_server` and need the multi-GB MinerU dependency tree. The `requirements.txt` work that would let CI run the full suite is a `good-first-issue` (see [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md)).
 5. **Consumer-hardware perf on 16GB MacBook Air.** Translation works but the memory budget is tight. MPS pressure is the bottleneck.
 
 ## Help wanted
