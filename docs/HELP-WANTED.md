@@ -22,8 +22,8 @@ There is no Windows installer and no Linux package, which blocks the majority of
 potential users entirely.
 
 **Where to start:**
-- `.github/workflows/ci.yml` — does not exist yet; it will be created in T6.
-  The Windows and Linux jobs belong in that file.
+- `.github/workflows/ci.yml` — the Windows and Linux jobs belong in this file
+  alongside the existing `macos-latest` job in the `test` matrix and the `release` job.
 - `src-tauri/tauri.conf.json` — Tauri's `bundle` targets config.
 - `scripts/build-mineru.sh` — the MinerU venv build script; Linux requires
   different PaddleOCR wheels; Windows requires a different env setup.
