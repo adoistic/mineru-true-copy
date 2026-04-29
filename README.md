@@ -16,7 +16,7 @@ IndicTrans2 ships in the same Tauri bundle. MPS batching is tuned for 16GB Apple
 
 ## Status
 
-`v0.1.0` is in flight. The strip and scrub passes have landed on `main`. License, NOTICE, and proprietary code removal are done. The build runs locally on Apple Silicon today. A signed `.dmg` is on the Phase 4 punch list.
+`v0.1.0` is in flight. The strip and scrub passes have landed on `main`. License, NOTICE, and proprietary code removal are done. The build runs locally on Apple Silicon today. A `.dmg` will land with the v0.1.0 tag.
 
 The full development plan is below. It is honest about what is broken so contributors can show up.
 
@@ -42,7 +42,7 @@ Both Python servers run as Tauri sidecars. The renderer is a Next.js app inside 
 
 ## Quick start
 
-A signed `.dmg` will land with v0.1.0. Until then, build from source on Apple Silicon:
+A `.dmg` will land with the v0.1.0 tag. Until then, build from source on Apple Silicon:
 
 ```bash
 git clone https://github.com/adoistic/mineru-true-copy.git
@@ -95,11 +95,10 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 ### Phase 4: Ship infrastructure
 
-- [x] [`.github/workflows/ci.yml`](.github/workflows/ci.yml) using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg`, signs and notarizes if cert secrets are present, attaches the artifact to the GitHub Release.
+- [x] [`.github/workflows/ci.yml`](.github/workflows/ci.yml) using [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action). PR job runs `next lint`, `vitest`, `pytest`, and `cargo check`. Tag push (`v*`) builds the macOS `.dmg` and attaches the artifact to the GitHub Release.
 - [x] CI strip-clean job. Fail any PR that reintroduces `firebase`, `deductCredit`, `activationKey`, or the prior brand strings.
 - [x] [`.github/ISSUE_TEMPLATE/`](.github/ISSUE_TEMPLATE/) with bug report, feature request, and `good-first-issue` templates linked to HELP-WANTED items.
 - [x] [`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md) with a NOTICE-update checkbox.
-- [x] Unsigned build path. v0.1 ships without an Apple Developer cert — the CI release job's signing step is gated on `secrets.APPLE_CERTIFICATE != ''` so unsigned builds land cleanly. Code signing is a v0.2 candidate (see `docs/ROADMAP.md`); first-launch Gatekeeper bypass is documented inline in the GitHub Release notes.
 
 ### Phase 5: Demo asset
 

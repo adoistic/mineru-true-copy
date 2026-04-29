@@ -35,9 +35,9 @@ potential users entirely.
 - The MinerU Python sidecar builds and launches correctly on each target platform.
 - macOS builds are not regressed.
 
-**Discuss first if:** you plan to tackle Windows code-signing — that is a distinct
-sub-task requiring a cert and its own CI secrets, and it is fine to land unsigned
-Windows builds first.
+**Discuss first if:** the MinerU Linux dependency story turns out to be more
+involved than expected — Paddle wheel availability and OpenCV system deps on
+Ubuntu/Debian have been moving targets historically.
 
 ---
 

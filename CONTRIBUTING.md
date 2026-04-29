@@ -127,9 +127,7 @@ cargo check
 
 ## 5. CI workflow notes
 
-`ci.yml` (`.github/workflows/ci.yml`) uses `tauri-apps/tauri-action`. Two jobs run on every PR (`test` on macos-latest + `strip-clean` on ubuntu-latest); a third (`release`) runs on `v*` tag pushes and produces an unsigned `.dmg` in a draft GitHub Release.
-
-The `release` job ships **unsigned** by default. Users on macOS will see a Gatekeeper warning on first launch and need to right-click → Open. Code signing is out of scope for v0.1; if you fork and want signed builds, the workflow already has placeholders gated on `secrets.APPLE_CERTIFICATE != ''` — populate the standard tauri-action secret set (`APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_SIGNING_IDENTITY`, `KEYCHAIN_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`) and signing kicks in automatically. See https://v2.tauri.app/distribute/sign/macos/ for the canonical list.
+`ci.yml` (`.github/workflows/ci.yml`) uses `tauri-apps/tauri-action`. Two jobs run on every PR (`test` on macos-latest + `strip-clean` on ubuntu-latest); a third (`release`) runs on `v*` tag pushes and produces a `.dmg` in a draft GitHub Release.
 
 The `strip-clean` job blocks any PR that reintroduces post-AGPL-relaunch forbidden symbols (`firebase`, `deductCredit`, `activationKey`, `ActivationScreen`). If you have a legitimate need to add one of these strings, raise it in the PR.
 
