@@ -1,4 +1,4 @@
-// Core types for DocTransform
+// Core types for MinerU True Copy
 
 export type JobType = 'ocr' | 'extract' | 'heading_correction' | 'wizard' | 'translate';
 export type JobStatus = 'queued' | 'processing' | 'completed' | 'failed' | 'retrying' | 'permanently_failed';

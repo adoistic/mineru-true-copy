@@ -8,11 +8,11 @@ import { v4 as uuidv4 } from 'uuid';
 let db: Database.Database | null = null;
 
 function getDbPath(): string {
-  const appDataDir = path.join(os.homedir(), '.doctransform');
+  const appDataDir = path.join(os.homedir(), '.mineru-true-copy');
   if (!fs.existsSync(appDataDir)) {
     fs.mkdirSync(appDataDir, { recursive: true });
   }
-  return path.join(appDataDir, 'doctransform.db');
+  return path.join(appDataDir, 'mineru-true-copy.db');
 }
 
 export function getDb(): Database.Database {

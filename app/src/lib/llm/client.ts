@@ -59,8 +59,8 @@ async function callWithRetry(
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${apiKey}`,
-          'HTTP-Referer': 'https://doctransform.app',
-          'X-Title': 'DocTransform',
+          'HTTP-Referer': 'https://github.com/adoistic/mineru-true-copy',
+          'X-Title': 'MinerU True Copy',
         },
         body: JSON.stringify({
           model: model.id,

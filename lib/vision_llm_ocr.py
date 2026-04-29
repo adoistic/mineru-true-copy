@@ -177,8 +177,8 @@ def _call_openrouter(image_b64: str, prompt: str, *, max_tokens: int = 4096, jso
                     headers={
                         "Content-Type": "application/json",
                         "Authorization": f"Bearer {api_key}",
-                        "HTTP-Referer": "https://doctransform.app",
-                        "X-Title": "DocTransform",
+                        "HTTP-Referer": "https://github.com/adoistic/mineru-true-copy",
+                        "X-Title": "MinerU True Copy",
                     },
                     method="POST",
                 )

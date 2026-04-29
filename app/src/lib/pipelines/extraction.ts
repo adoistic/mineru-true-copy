@@ -144,7 +144,7 @@ async function rasterizePages(pdfPath: string, maxPages: number): Promise<Array<
       const singlePageBytes = await singlePageDoc.save();
 
       const tempPath = path.join(
-        fs.mkdtempSync(path.join(require('os').tmpdir(), 'doctransform-')),
+        fs.mkdtempSync(path.join(require('os').tmpdir(), 'mineru-true-copy-')),
         `page_${i + 1}.pdf`
       );
       fs.writeFileSync(tempPath, singlePageBytes);

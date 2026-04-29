@@ -143,7 +143,7 @@ export async function runPipeline(params: {
 
   // Clean up temp upload file
   try {
-    if (filePath.includes('doctransform-uploads') && fs.existsSync(filePath)) {
+    if (filePath.includes('mineru-true-copy-uploads') && fs.existsSync(filePath)) {
       fs.unlinkSync(filePath);
     }
   } catch (cleanupErr) {
@@ -155,12 +155,12 @@ export async function runPipeline(params: {
 }
 
 /**
- * Safety-net cleanup: removes any files in the doctransform-uploads temp dir
+ * Safety-net cleanup: removes any files in the mineru-true-copy-uploads temp dir
  * that are older than 24 hours (covers crashed/abandoned jobs).
  */
 export function cleanupOldTempFiles(): void {
   try {
-    const tmpDir = path.join(os.tmpdir(), 'doctransform-uploads');
+    const tmpDir = path.join(os.tmpdir(), 'mineru-true-copy-uploads');
     if (!fs.existsSync(tmpDir)) return;
     const cutoff = Date.now() - 24 * 60 * 60 * 1000;
     for (const file of fs.readdirSync(tmpDir)) {
