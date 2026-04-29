@@ -32,10 +32,11 @@ The `mineru-venv/` directory is a Python 3.12 virtual environment. It is not com
 ```bash
 # From repo root
 python3.12 -m venv mineru-venv
-./mineru-venv/bin/pip install -r requirements.txt   # if present, else see README
 ```
 
-`translation_server.py` expects a separate `test-venv/` with IndicTrans2 deps (see the usage comment at the top of that file).
+There is no `requirements.txt` at v0.1. The MinerU dependency list lives in the PyInstaller spec at `scripts/bundle-mineru.spec` and the imports at the top of `mineru_server.py`. Documenting a clean dependency manifest is an open contributor task — see `docs/HELP-WANTED.md`.
+
+`translation_server.py` expects a separate `test-venv/` with IndicTrans2 deps (see the usage comment at the top of that file). The `scripts/build-mineru.sh` PyInstaller bundle also runs from `test-venv/`, not `mineru-venv/`.
 
 ### Node dependencies
 
@@ -48,7 +49,7 @@ npm install
 
 ## 2. Local dev workflow
 
-Four processes run in parallel. Open four terminals from the repo root.
+Three services plus the desktop window. Open four terminals from the repo root (Terminal 4 is optional and only needed for translation work).
 
 **Terminal 1 — Next.js dev server**
 ```bash
@@ -59,12 +60,10 @@ npm run dev
 
 **Terminal 2 — Tauri dev** (launches the desktop window)
 ```bash
-# From repo root
-cd app && npm run dev &   # if not already running
-cd ..
-cargo tauri dev
-# Or: npx @tauri-apps/cli dev
+# From repo root — Terminal 1 must already be running (Tauri loads from devUrl)
+npx @tauri-apps/cli dev
 ```
+The Tauri CLI is not in `app/package.json` devDependencies and is not installed globally by default. Use `npx` as shown, or install once with `cargo install tauri-cli` if you prefer `cargo tauri dev`.
 
 **Terminal 3 — MinerU server**
 ```bash
@@ -82,7 +81,7 @@ cargo tauri dev
 
 ## 3. Test commands
 
-All commands must pass before opening a PR.
+Run the suites relevant to your change before opening a PR. A frontend-only change does not need the Python suite if the venv isn't set up, but anything touching `lib/` or the sidecars must run pytest.
 
 ### Next.js lint (run from `app/`)
 ```bash
