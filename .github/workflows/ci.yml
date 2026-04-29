@@ -220,16 +220,6 @@ jobs:
       - name: Build + release
         uses: tauri-apps/tauri-action@v0.6.2
         env:
-          # Apple signing/notarization secrets — optional. If unset (e.g. on a
-          # fork without the cert configured), tauri-action skips signing and
-          # produces an unsigned .dmg. The build still succeeds.
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE || '' }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_SIGNING_IDENTITY || '' }}
-          APPLE_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_ID || '' }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_PASSWORD || '' }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.APPLE_TEAM_ID || '' }}
-          KEYCHAIN_PASSWORD: ${{ secrets.APPLE_CERTIFICATE != '' && secrets.KEYCHAIN_PASSWORD || '' }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           tagName: ${{ github.ref_name }}
