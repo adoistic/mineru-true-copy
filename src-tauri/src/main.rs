@@ -54,12 +54,13 @@ fn main() {
             let is_dev = cfg!(debug_assertions);
 
             if is_dev {
-                // Dev mode: Next.js on :3000 and MinerU on :8765 are started manually
+                // Dev mode: Next.js on :51821 and MinerU on :51820 are started manually.
+                // Ports match scripts/run.sh and tauri.conf.json devUrl.
                 tauri::async_runtime::spawn(async move {
-                    splash_emit(&handle, "starting", Some("Dev mode — connecting to localhost:3000"));
+                    splash_emit(&handle, "starting", Some("Dev mode — connecting to localhost:51821"));
 
                     // Wait for Next.js to be ready
-                    if let Err(e) = wait_for_health("http://localhost:3000/api/health", Duration::from_secs(10)).await {
+                    if let Err(e) = wait_for_health("http://localhost:51821/api/health", Duration::from_secs(10)).await {
                         eprintln!("[dev] Next.js not ready: {e}. Navigating anyway...");
                     }
 
@@ -67,7 +68,7 @@ fn main() {
                     tokio::time::sleep(Duration::from_millis(200)).await;
 
                     if let Some(window) = handle.get_webview_window("main") {
-                        let _ = window.navigate("http://localhost:3000".parse().unwrap());
+                        let _ = window.navigate("http://localhost:51821".parse().unwrap());
                     }
                 });
             } else {
