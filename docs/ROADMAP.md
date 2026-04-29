@@ -82,11 +82,11 @@ Nothing below is committed. Each item is marked **candidate** because it is unde
 
 ### Discarded block recovery for styled headers
 
-**Candidate.** MinerU's `Abandon` classifier misclassifies large styled headers as discarded content. A content-bounds approach to recover them has been proposed but is not implemented. See README "Known limitations" item 2. This is a genuine accuracy gap for documents with prominent section headers.
+**Candidate.** MinerU's `Abandon` classifier misclassifies large styled headers as discarded content. A content-bounds approach to recover them has been proposed but is not implemented. See README "Known limitations" item 2. This is a genuine accuracy gap for documents with prominent section headers. Touches MinerU classifier internals (`lib/patch_mineru.py`) and the upstream Abandon heuristic — non-trivial relative to peer candidates here.
 
 ### Multi-file batch UI
 
-**Candidate.** Queue logic exists in `app/src/lib/pipelines/queue.ts`. No UI exposes it. A batch panel with per-file status, a stop control, and progress would unlock processing hundreds of documents without manual re-submission. The credit-calculation and LRU eviction logic that batch mode needs is not yet written.
+**Candidate.** Queue logic exists in `app/src/lib/pipelines/queue.ts`. No UI exposes it. A batch panel with per-file status, a stop control, and progress would unlock processing hundreds of documents without manual re-submission. The supporting work — page-count pre-calculation (so the UI can warn before a large run starts) and LRU model-cache eviction under memory pressure — is not yet written.
 
 ### Broader VLM provider support
 
