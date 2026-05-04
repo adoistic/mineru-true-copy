@@ -4,6 +4,10 @@ A Tauri desktop app that turns PDFs into editable documents while keeping the pa
 
 Bring your own OpenRouter key for cloud OCR. Local OCR via PaddleOCR is the default. No telemetry. No auth. No rate limit.
 
+![PaddleOCR strips bold and italic; vision-LLM through MinerU preserves them. Same NCERT Geography PDF, same MinerU pipeline — only the OCR backend differs.](samples/comparison-bold-italic.png)
+
+*Local PaddleOCR (left): 0 bold spans, 0 italic spans. Cloud vision-LLM (right): 32 bold spans (red), 10 italic spans (green). Reproduce with `node samples/run-ocr-comparison.mjs <your-pdf>` — see [samples/](samples/).*
+
 ## Why this exists
 
 PaddleOCR strips typographic emphasis. Open a Hindi gazette in MinerU and the bold section headers come back as plain text. The structural information is real and visible on the page. The pipeline throws it away.

@@ -58,14 +58,43 @@ async function pollUntilDone(taskId, mode) {
   throw new Error(`[${mode}] task timed out after ${POLL_TIMEOUT_MS / 1000}s`);
 }
 
-async function getContentList(taskId) {
-  const res = await fetch(`${SERVER}/tasks/${taskId}/export/content_list`);
-  if (!res.ok) {
-    throw new Error(`GET /tasks/${taskId}/export/content_list failed: ${res.status} ${await res.text()}`);
+async function getResult(taskId) {
+  const res = await fetch(`${SERVER}/tasks/${taskId}`);
+  if (!res.ok) throw new Error(`GET /tasks/${taskId} failed: ${res.status}`);
+  const data = await res.json();
+  if (!data.result || !data.result.pdf_info) {
+    throw new Error(`Task ${taskId} has no result.pdf_info: ${JSON.stringify(data).slice(0, 200)}`);
   }
-  const json = await res.json();
-  // Server wraps content_list in {format, data}. Be permissive.
-  return Array.isArray(json) ? json : (json.data || []);
+  // pdf_info is a list of pages; each page has preproc_blocks (or para_blocks).
+  // Flatten into a single block list with page_idx attached so the rendering
+  // can preserve page boundaries if it wants to.
+  const blocks = [];
+  for (const page of data.result.pdf_info) {
+    const pageIdx = page.page_idx ?? 0;
+    const pageBlocks = page.preproc_blocks || page.para_blocks || page.blocks || [];
+    for (const b of pageBlocks) {
+      // Block text lives in `text` for top-level blocks, but list/title blocks
+      // sometimes nest text under `lines[].spans[].content`. Normalize.
+      let text = b.text || b.content || '';
+      if (!text && Array.isArray(b.lines)) {
+        const parts = [];
+        for (const line of b.lines) {
+          for (const span of (line.spans || [])) {
+            if (span.content) parts.push(span.content);
+            else if (span.text) parts.push(span.text);
+          }
+        }
+        text = parts.join(' ');
+      }
+      blocks.push({
+        type: b.type || 'text',
+        text,
+        text_level: b.text_level,
+        page_idx: pageIdx,
+      });
+    }
+  }
+  return blocks;
 }
 
 async function deleteTask(taskId) {
@@ -81,7 +110,7 @@ async function runOnePass(pdfPath, mode) {
   const taskId = await submitPdf(pdfPath, mode);
   console.log(`[${mode}] task ${taskId}; polling…`);
   await pollUntilDone(taskId, mode);
-  const list = await getContentList(taskId);
+  const list = await getResult(taskId);
   await deleteTask(taskId);
   console.log(`[${mode}] got ${list.length} content blocks`);
   return list;
@@ -219,7 +248,10 @@ async function main() {
   }
 
   const basename = path.basename(pdfPath, path.extname(pdfPath));
-  const outDir = path.join(path.dirname(path.resolve(pdfPath)), 'out');
+  // Outputs always go under samples/out/, regardless of where the source PDF lives.
+  // The script's own directory is samples/, so resolve relative to that.
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+  const outDir = path.join(scriptDir, 'out');
   fs.mkdirSync(outDir, { recursive: true });
 
   console.log(`Checking ${SERVER}/health…`);
