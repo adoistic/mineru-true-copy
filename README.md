@@ -134,7 +134,7 @@ Each item is tracked on GitHub. Detail and file pointers in [`docs/HELP-WANTED.m
 
 ## License
 
-AGPL-3.0. Forced by upstream MinerU. `lib/patch_mineru.py` patches MinerU's internals at runtime, which makes this project a derivative work. Full license text in [LICENSE](LICENSE). Third-party attribution in [NOTICE](NOTICE).
+AGPL-3.0. Forced by upstream MinerU. `lib/patch_mineru.py` patches MinerU's internals at runtime, which makes this project a derivative work. The patch targets MinerU 2.x (the `magic_pdf` package); MinerU 3.0+ moved to the `mineru` namespace under a different license and is not supported here. Full license text in [LICENSE](LICENSE). Third-party attribution in [NOTICE](NOTICE).
 
 If you run a modified version of this software as a network service, AGPL §13 obliges you to publish your modifications.
 
