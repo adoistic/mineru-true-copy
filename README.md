@@ -16,9 +16,9 @@ Vision-language models read it. Claude, Gemini, and the modern Qwen-VLs return b
 
 True-copy export sits next to the markdown export MinerU already produces. The markdown serializer drops page geometry. A different serializer measures glyphs against the original page bounds and writes DOCX, PPTX, or PDF that match the layout. The measurement engine is `@chenglou/pretext`, which needs a canvas. Tauri's WebKit renderer has one.
 
-![Original PDF page (left) and the project's true-copy HTML export (right), rendered side-by-side. Same NCERT Geography page; the two-column body, numbered list, section headings, and figure all land at their original page positions.](samples/comparison-layout-preserving.png)
+![Original PDF page (left) and the project's true-copy DOCX export rendered to PDF via LibreOffice (right), side-by-side. Same NCERT Geography page — the two-column body, numbered list, section headings, and chapter marker all land at the original page positions through a real DOCX → Word/LibreOffice → PDF round-trip.](samples/comparison-layout-preserving.png)
 
-*Original PDF (left) vs true-copy HTML produced by `app/src/lib/export/true-copy-html.ts`. Per-glyph positions measured against the source page bounds via `@chenglou/pretext`. Same exporter writes DOCX, PPTX, and PDF.*
+*Original PDF (left) vs the project's true-copy DOCX export, rendered through LibreOffice. Pipeline: MinerU OCR → `app/src/lib/export/true-copy-docx.ts` → `samples/to-pdf.sh` → `pdftoppm`. Per-glyph positions measured against the source page bounds via `@chenglou/pretext`. Same exporter also produces PPTX and PDF directly.*
 
 IndicTrans2 ships in the same Tauri bundle. MPS batching is tuned for 16GB Apple Silicon.
 
