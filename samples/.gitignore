@@ -1,0 +1,3 @@
+# Don't commit user-supplied sample PDFs (likely copyrighted) or generated outputs.
+*.pdf
+out/
