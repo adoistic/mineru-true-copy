@@ -62,6 +62,18 @@ PaddleOCR
 - Use:      Local OCR backend (used by MinerU when cloud OCR is disabled).
 
 
+@chenglou/pretext
+-----------------
+- Upstream: https://www.npmjs.com/package/@chenglou/pretext
+- Author:   Cheng Lou
+- License:  MIT License
+- Use:      Glyph-measurement layout engine for the true-copy exporters
+            (app/src/lib/export/positioning-core.ts and
+            app/src/lib/export/true-copy-html.ts). Measures text against the
+            original page bounds so DOCX/PPTX/PDF/HTML output matches the
+            source layout.
+
+
 font_classifier (font-identifier)
 ---------------------------------
 - Upstream: https://github.com/gaborcselle/font-identifier
