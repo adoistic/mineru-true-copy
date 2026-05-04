@@ -6,8 +6,7 @@ Builds a --onedir bundle containing mineru_server.py and all MinerU/torch
 dependencies. Models are NOT included — they are loaded at runtime from
 the path passed via --models-dir.
 
-Usage:
-    cd "Data Transformation App"
+Usage (from the repo root):
     test-venv/bin/pyinstaller scripts/bundle-mineru.spec
 """
 
