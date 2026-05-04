@@ -333,7 +333,7 @@ Each job goes through `PipelineRunner` (`runner.ts`), which retries up to
 
 ## 8. Module split (deferred to v0.2)
 
-`mineru_server.py` is 3,247 lines. Filed as GitHub issue #1
+`mineru_server.py` is 3,247 lines. Filed as [issue #8](https://github.com/adoistic/mineru-true-copy/issues/8)
 (`good first issue`) for v0.2: split into `server.py` (HTTP layer),
 `cleanup.py` (the `/tmp/mineru_*` sweep and disk-space guard),
 `processing.py` (the MinerU invocation and per-page work), and `fonts.py`

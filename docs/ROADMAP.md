@@ -66,7 +66,7 @@ Nothing below is committed. Each item is marked **candidate** because it is unde
 
 ### Refactor `mineru_server.py` into modules
 
-**Candidate.** The file is 3,247 lines. The split is mechanical: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as issue #1, tagged `good first issue`. Blocked only by someone having time to do it — no design decisions required.
+**Candidate.** The file is 3,247 lines. The split is mechanical: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as [issue #8](https://github.com/adoistic/mineru-true-copy/issues/8), tagged `good first issue`. Blocked only by someone having time to do it — no design decisions required.
 
 ### Translation sidecar auto-spawn from Tauri
 

@@ -65,7 +65,7 @@ Full attribution and license terms in [NOTICE](NOTICE).
 
 ## Development plan
 
-This section is the live plan. Tasks land roughly in order. Anything marked v0.2 is filed as a `good first issue` once the v0.1 release infrastructure is in place.
+This section is the live plan. Tasks land roughly in order. v0.2 candidates are tracked as GitHub issues — see [Help wanted](#help-wanted) below.
 
 ### Phase 1: Strip, scrub, harden
 
@@ -80,7 +80,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 
 ### Phase 2: Refactor `mineru_server.py` (deferred to v0.2)
 
-3,247 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as GitHub issue #1, `good first issue`, at v0.1 launch. The split is mechanical work that benefits from a fresh pair of eyes.
+3,247 lines is too much to invite contributions to. The file splits into four modules: `server.py`, `cleanup.py`, `processing.py`, `fonts.py`. Filed as [issue #8](https://github.com/adoistic/mineru-true-copy/issues/8), `good first issue`. The split is mechanical work that benefits from a fresh pair of eyes.
 
 ### Phase 3: Public docs
 
@@ -90,7 +90,7 @@ The proprietary scaffolding (admin app, Firebase auth, activation key cache, cre
 - [x] [`CONTRIBUTING.md`](CONTRIBUTING.md). Setup, dev workflow, PR submission, CI workflow notes.
 - [x] [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Tauri to Next.js to Python sidecars. Data flow for OCR, translation, export.
 - [x] [`docs/ROADMAP.md`](docs/ROADMAP.md). Windows and Linux builds, broader VLM provider support, batch UI, future direction.
-- [x] [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md). The five concrete asks below, with file pointers.
+- [x] [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md). The six concrete asks below, with file pointers.
 - [x] Move the prior internal notes (`CLAUDE.md`, `DESIGN.md`, `TODOS.md`) to a gitignored `docs/internal/`. Write fresh public docs at the root.
 
 ### Phase 4: Ship infrastructure
@@ -117,19 +117,20 @@ These are real. Naming them is the price of asking for help.
 
 1. **Windows and Linux builds.** None yet. Apple Silicon macOS only at v0.1 (the CI release job builds for the `macos-latest` runner's host arch — arm64). Intel and universal binaries are a v0.2 candidate.
 2. **Discarded block recovery for styled headers.** MinerU's `Abandon` classifier sometimes misclassifies large styled headers as discarded. A content-bounds proposal exists but is not implemented.
-3. **`mineru_server.py` is 3,247 lines.** Hard to read, harder to test. The module split is filed as issue #1.
+3. **`mineru_server.py` is 3,247 lines.** Hard to read, harder to test. The module split is filed as [issue #8](https://github.com/adoistic/mineru-true-copy/issues/8).
 4. **CI runs a thin slice of the test suite.** `pytest lib/tests/test_translation.py` is the only Python test in CI because the other 10 tests transitively import `mineru_server` and need the multi-GB MinerU dependency tree. The `requirements.txt` work that would let CI run the full suite is a `good-first-issue` (see [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md)).
 5. **Consumer-hardware perf on 16GB MacBook Air.** Translation works but the memory budget is tight. MPS pressure is the bottleneck.
 
 ## Help wanted
 
-Each item maps to a `good first issue` label once Phase 4 lands.
+Each item is tracked on GitHub. Detail and file pointers in [`docs/HELP-WANTED.md`](docs/HELP-WANTED.md).
 
-1. Windows and Linux builds via `tauri-action`.
-2. Tests for the `mineru_server.py` module split.
-3. Discarded block recovery: replace the Abandon-class heuristic with content-bounds.
-4. The CI workflow itself.
-5. 16GB Apple Silicon translation perf.
+1. [#6](https://github.com/adoistic/mineru-true-copy/issues/6) — Windows and Linux builds via `tauri-action`.
+2. [#7](https://github.com/adoistic/mineru-true-copy/issues/7) — Discarded block recovery: replace the Abandon-class heuristic with content-bounds.
+3. [#8](https://github.com/adoistic/mineru-true-copy/issues/8) — `mineru_server.py` module split (`good first issue`).
+4. [#9](https://github.com/adoistic/mineru-true-copy/issues/9) — Document the Python dependency manifest (`requirements.txt`) (`good first issue`).
+5. [#10](https://github.com/adoistic/mineru-true-copy/issues/10) — Memory budget on 16 GB Apple Silicon (translation MPS tuning).
+6. [#11](https://github.com/adoistic/mineru-true-copy/issues/11) — Fix pre-existing lint errors so CI lint can be a hard gate (`good first issue`).
 
 ## License
 

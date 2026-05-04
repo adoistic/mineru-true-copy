@@ -1,6 +1,6 @@
 # Help Wanted
 
-Five concrete ways to contribute at v0.1. Each ask has enough context to scope
+Six concrete ways to contribute at v0.1. Each ask has enough context to scope
 the work before opening a PR — read the relevant files first.
 
 ## Index
@@ -86,7 +86,7 @@ that may break upstream compatibility.
 **The problem:** `mineru_server.py` is 3,247 lines. It contains HTTP routing,
 MinerU invocation, per-task cleanup, and font handling all in one file. It is
 hard to read, hard to review, and slow to navigate. The split is filed as
-GitHub issue #1.
+[issue #8](https://github.com/adoistic/mineru-true-copy/issues/8).
 
 **Where to start:**
 - `mineru_server.py` — the whole file. Proposed split:
@@ -183,7 +183,7 @@ PyTorch versions; confirm your approach on both 2.x and 2.5+ first.
 
 ---
 
-## 6. Fix pre-existing lint errors so CI lint can be tightened
+### 6. Fix pre-existing lint errors so CI lint can be tightened
 
 **Difficulty:** good-first-issue
 
