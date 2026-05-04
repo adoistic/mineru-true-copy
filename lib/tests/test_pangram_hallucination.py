@@ -381,7 +381,7 @@ def process_document(pdf_path: str, doc_name: str):
     # Cleanup task
     try:
         requests.delete(f"{MINERU_URL}/tasks/{task_id}", timeout=5)
-    except:
+    except Exception:
         pass
 
     return report
