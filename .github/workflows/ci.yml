@@ -175,6 +175,21 @@ jobs:
             FOUND=1
           fi
 
+          echo "=== Checking: DocTransform (prior brand, case-insensitive) ==="
+          # Pre-rename brand string. README + CONTRIBUTING reference the rename
+          # in narrative form, so they are excluded.
+          if grep -rwni \
+               --exclude-dir=node_modules --exclude-dir=mineru-venv --exclude-dir=test-venv \
+               --exclude-dir=.git --exclude-dir=dist --exclude-dir=.next \
+               --exclude-dir=docs/internal \
+               '--exclude=*.lock' --exclude=CHANGELOG.md --exclude=README.md \
+               --exclude=CONTRIBUTING.md --exclude=PULL_REQUEST_TEMPLATE.md \
+               '--exclude=runner.smoke.test.ts' --exclude=ci.yml \
+               "DocTransform" .; then
+            echo "ERROR: 'DocTransform' found in source tree"
+            FOUND=1
+          fi
+
           if [ "$FOUND" -eq 1 ]; then
             echo ""
             echo "FAILED: Forbidden symbols detected. Remove them before merging."
